@@ -1,0 +1,3 @@
+tricore-web-rust/node_modules/
+tricore-server/target/debug/
+tricore-web-rust/dist/
