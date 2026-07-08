@@ -1,28 +1,24 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-
-export interface Employee {
-  id: string
-  name: string
-  department: string
-  position: string
-  email: string
-}
+import { oaAPI } from '@/services/api'
 
 export const useOAStore = defineStore('oa', () => {
-  const employees = ref<Employee[]>([])
+  const employees = ref<any[]>([])
+  const workflows = ref<any[]>([])
   const loading = ref(false)
 
   async function fetchEmployees() {
     loading.value = true
     try {
-      const { oaAPI } = await import('@/services/api')
-      const res = await oaAPI.healthCheck()
-      console.log('OA health:', res)
-    } finally {
-      loading.value = false
-    }
+      const res: any = await oaAPI.listEmployees({ per_page: 100 })
+      employees.value = res?.data?.data || res?.data || []
+    } finally { loading.value = false }
   }
 
-  return { employees, loading, fetchEmployees }
+  async function fetchWorkflows() {
+    const res: any = await oaAPI.listWorkflows({ per_page: 50 })
+    workflows.value = res?.data?.data || res?.data || []
+  }
+
+  return { employees, workflows, loading, fetchEmployees, fetchWorkflows }
 })

@@ -1,28 +1,29 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-
-export interface Product {
-  id: string
-  sku: string
-  name: string
-  quantity: number
-  price: number
-}
+import { inventoryAPI } from '@/services/api'
 
 export const useInventoryStore = defineStore('inventory', () => {
-  const products = ref<Product[]>([])
+  const products = ref<any[]>([])
+  const stockIn = ref<any[]>([])
+  const stockOut = ref<any[]>([])
+  const issues = ref<any[]>([])
   const loading = ref(false)
 
-  async function fetchProducts() {
+  async function fetchAll() {
     loading.value = true
     try {
-      const { inventoryAPI } = await import('@/services/api')
-      const res = await inventoryAPI.healthCheck()
-      console.log('Inventory health:', res)
-    } finally {
-      loading.value = false
-    }
+      const [p, si, so, iss]: any[] = await Promise.all([
+        inventoryAPI.listProducts(),
+        inventoryAPI.listStockIn({ per_page: 50 }),
+        inventoryAPI.listStockOut({ per_page: 50 }),
+        inventoryAPI.listIssues({ per_page: 50 }),
+      ])
+      products.value = p?.data || []
+      stockIn.value = si?.data?.data || si?.data || []
+      stockOut.value = so?.data?.data || so?.data || []
+      issues.value = iss?.data?.data || iss?.data || []
+    } finally { loading.value = false }
   }
 
-  return { products, loading, fetchProducts }
+  return { products, stockIn, stockOut, issues, loading, fetchAll }
 })
