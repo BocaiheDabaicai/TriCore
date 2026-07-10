@@ -29,7 +29,8 @@ export const salesAPI = {
   listOrders: (params?: Record<string, unknown>) => api.get('/sales/orders', { params }),
   getOrder: (id: string) => api.get(`/sales/orders/${id}`),
   createOrder: (data: Record<string, unknown>) => api.post('/sales/orders', data),
-  updateOrderStatus: (id: string, status: string) => api.patch(`/sales/orders/${id}/status`, { status }),
+  updateOrder: (id: string, data: Record<string, unknown>) => api.put(`/sales/orders/${id}`, data),
+  updateOrderStatus: (id: string, data: Record<string, unknown>) => api.patch(`/sales/orders/${id}/status`, data),
   listBundles: (params?: Record<string, unknown>) => api.get('/sales/bundles', { params }),
   getBundle: (id: string) => api.get(`/sales/bundles/${id}`),
   createBundle: (data: Record<string, unknown>) => api.post('/sales/bundles', data),
@@ -45,10 +46,12 @@ export const oaAPI = {
   getEmployee: (id: string) => api.get(`/oa/employees/${id}`),
   createEmployee: (data: Record<string, unknown>) => api.post('/oa/employees', data),
   updateEmployee: (id: string, data: Record<string, unknown>) => api.put(`/oa/employees/${id}`, data),
+  deleteEmployee: (id: string) => api.delete(`/oa/employees/${id}`),
   listWorkflows: (params?: Record<string, unknown>) => api.get('/oa/workflows', { params }),
   getWorkflow: (id: string) => api.get(`/oa/workflows/${id}`),
   createWorkflow: (data: Record<string, unknown>) => api.post('/oa/workflows', data),
   updateWorkflow: (id: string, data: Record<string, unknown>) => api.put(`/oa/workflows/${id}`, data),
+  deleteWorkflow: (id: string) => api.delete(`/oa/workflows/${id}`),
   submitWorkflow: (id: string) => api.post(`/oa/workflows/${id}/submit`),
   getSteps: (id: string) => api.get(`/oa/workflows/${id}/steps`),
   reviewStep: (wfId: string, stepId: string, data: Record<string, unknown>) =>
@@ -80,6 +83,33 @@ export const inventoryAPI = {
   resolveIssue: (id: string, data: { resolution: string }) => api.put(`/inventory/issues/${id}/resolve`, data),
   listProducts: () => api.get('/inventory/products'),
   getDashboard: () => api.get('/inventory/dashboard'),
+}
+
+export const masterDataAPI = {
+  // Customers
+  listCustomers: () => api.get('/master-data/customers'),
+  getCustomer: (id: string) => api.get(`/master-data/customers/${id}`),
+  createCustomer: (data: Record<string, unknown>) => api.post('/master-data/customers', data),
+  updateCustomer: (id: string, data: Record<string, unknown>) => api.put(`/master-data/customers/${id}`, data),
+  deleteCustomer: (id: string) => api.delete(`/master-data/customers/${id}`),
+  // Departments
+  listDepartments: () => api.get('/master-data/departments'),
+  getDepartment: (id: string) => api.get(`/master-data/departments/${id}`),
+  createDepartment: (data: Record<string, unknown>) => api.post('/master-data/departments', data),
+  updateDepartment: (id: string, data: Record<string, unknown>) => api.put(`/master-data/departments/${id}`, data),
+  deleteDepartment: (id: string) => api.delete(`/master-data/departments/${id}`),
+  // Positions
+  listPositions: () => api.get('/master-data/positions'),
+  getPosition: (id: string) => api.get(`/master-data/positions/${id}`),
+  createPosition: (data: Record<string, unknown>) => api.post('/master-data/positions', data),
+  updatePosition: (id: string, data: Record<string, unknown>) => api.put(`/master-data/positions/${id}`, data),
+  deletePosition: (id: string) => api.delete(`/master-data/positions/${id}`),
+  // Vehicles
+  listVehicles: () => api.get('/master-data/vehicles'),
+  getVehicle: (id: string) => api.get(`/master-data/vehicles/${id}`),
+  createVehicle: (data: Record<string, unknown>) => api.post('/master-data/vehicles', data),
+  updateVehicle: (id: string, data: Record<string, unknown>) => api.put(`/master-data/vehicles/${id}`, data),
+  deleteVehicle: (id: string) => api.delete(`/master-data/vehicles/${id}`),
 }
 
 export default api

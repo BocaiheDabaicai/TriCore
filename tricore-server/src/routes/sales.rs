@@ -20,6 +20,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/orders", web::get().to(sales::list_orders))
             .route("/orders/{id}", web::get().to(sales::get_order))
             .route("/orders", web::post().to(sales::create_order))
+            .route("/orders/{id}", web::put().to(sales::update_order))
             .route("/orders/{id}/status", web::patch().to(sales::update_order_status))
             // Bundle Sales
             .route("/bundles", web::get().to(sales::list_bundles))

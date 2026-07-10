@@ -1,4 +1,5 @@
 mod inventory;
+mod master_data;
 mod oa;
 mod sales;
 
@@ -9,6 +10,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         web::scope("/api")
             .configure(sales::configure)
             .configure(oa::configure)
-            .configure(inventory::configure),
+            .configure(inventory::configure)
+            .configure(master_data::configure),
     );
 }

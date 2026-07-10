@@ -1,16 +1,40 @@
 <script setup lang="ts">
 import { ref, h, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { Popover, Tag } from 'ant-design-vue'
+import {
+  DashboardOutlined,
+  ShoppingCartOutlined,
+  AuditOutlined,
+  DatabaseOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  UserOutlined,
+  MailOutlined,
+  PhoneOutlined,
+  IdcardOutlined,
+  TeamOutlined,
+  SafetyCertificateOutlined,
+  SettingOutlined,
+} from '@ant-design/icons-vue'
+import { oaAPI } from '@/services/api'
 
 const router = useRouter()
 const route = useRoute()
 const collapsed = ref(false)
 const isDark = ref(true)
+const currentUser = ref<any>(null)
+const userHovered = ref(false)
 
-onMounted(() => {
+onMounted(async () => {
   const saved = localStorage.getItem('theme')
   isDark.value = saved ? saved === 'dark' : true
   applyTheme()
+  try {
+    const res: any = await oaAPI.listEmployees({ per_page: 1 })
+    const list = res?.data?.data || res?.data || []
+    if (list.length > 0) currentUser.value = list[0]
+  } catch { /* no user */ }
 })
 
 function applyTheme() {
@@ -24,13 +48,38 @@ function toggleTheme() {
 }
 
 const menuItems = [
-  { key: '/dashboard', icon: () => h('span', '📊'), label: '工作台' },
-  { key: '/sales',    icon: () => h('span', '🛒'), label: '销售管理' },
-  { key: '/oa',       icon: () => h('span', '📋'), label: '办公协同' },
-  { key: '/inventory',icon: () => h('span', '📦'), label: '库存管理' },
+  { key: '/dashboard', icon: () => h(DashboardOutlined), label: '工作台' },
+  { key: '/sales',     icon: () => h(ShoppingCartOutlined), label: '销售管理' },
+  { key: '/oa',       icon: () => h(AuditOutlined), label: '办公协同' },
+  { key: '/inventory', icon: () => h(DatabaseOutlined), label: '库存管理' },
+  {
+    key: 'master-data', icon: () => h(SettingOutlined), label: '基础数据',
+    children: [
+      { key: '/master-data/customers', label: '客户管理' },
+      { key: '/master-data/departments', label: '部门管理' },
+      { key: '/master-data/positions', label: '职位管理' },
+      { key: '/master-data/vehicles', label: '车辆管理' },
+    ],
+  },
 ]
 
-const currentLabel = () => menuItems.find(m => m.key === route.path)?.label || 'TriCore'
+const openKeys = ref<string[]>([])
+const updateOpenKeys = () => {
+  if (route.path.startsWith('/master-data')) openKeys.value = ['master-data']
+}
+updateOpenKeys()
+
+const currentLabel = () => {
+  const found = menuItems.find(m => m.key === route.path)
+  if (found) return found.label
+  for (const m of menuItems) {
+    if (m.children) {
+      const child = m.children.find((c: any) => c.key === route.path)
+      if (child) return child.label
+    }
+  }
+  return 'TriCore'
+}
 
 function onMenuClick({ key }: { key: string }) { router.push(key) }
 </script>
@@ -38,29 +87,155 @@ function onMenuClick({ key }: { key: string }) { router.push(key) }
 <template>
   <a-layout has-sider :style="{ background: 'var(--bg-primary)', minHeight: '100vh' }">
     <a-layout-sider
-      v-model:collapsed="collapsed" collapsible :width="220" trigger="null"
+      v-model:collapsed="collapsed"
+      collapsible
+      :width="230"
+      :collapsed-width="60"
+      :trigger="null"
       :style="{ background: 'var(--sidebar-bg)' }"
-      class="border-r" :class="'border-[var(--border-subtle)]'"
     >
-      <div class="h-16 flex items-center justify-center cursor-pointer select-none" @click="collapsed = !collapsed">
-        <span class="text-2xl font-bold gradient-text tracking-wider">{{ collapsed ? '三核' : 'TriCore' }}</span>
-        <span v-if="!collapsed" class="text-sm ml-1 mt-1" :style="{ color: 'var(--text-muted)' }">三核</span>
+      <!-- Logo area -->
+      <div
+        class="h-16 flex items-center justify-center gap-2 cursor-pointer select-none"
+        @click="router.push('/dashboard')"
+        :style="{ borderBottom: '1px solid var(--border-subtle)' }"
+      >
+        <span v-if="collapsed" class="text-xl font-bold gradient-text">三</span>
+        <template v-else>
+          <span class="text-xl font-bold gradient-text tracking-tight">TriCore</span>
+          <span class="text-xs font-medium px-1.5 py-0.5 rounded-md" :style="{ background: 'var(--accent-soft)', color: 'var(--accent)' }">三核</span>
+        </template>
       </div>
-      <a-menu theme="dark" mode="inline" :selected-keys="[route.path]" :items="menuItems"
+
+      <!-- Menu -->
+      <a-menu
+        theme="dark"
+        mode="inline"
+        :selected-keys="[route.path]"
+        :open-keys="openKeys"
+        :items="menuItems"
         @click="onMenuClick"
-        :style="{ background: 'transparent', borderInlineEnd: 'none' }"
-        class="px-3"
+        @update:openKeys="(keys: string[]) => openKeys = keys"
+        :style="{ background: 'transparent', borderInlineEnd: 'none', padding: '8px' }"
       />
-    </a-layout-sider>
-    <a-layout :style="{ background: 'transparent' }">
-      <div class="h-16 flex items-center justify-between px-6 border-b" :style="{ borderColor: 'var(--border-subtle)' }">
-        <span class="text-sm font-medium tracking-wide" :style="{ color: 'var(--text-secondary)' }">{{ currentLabel() }}</span>
-        <button class="theme-toggle-btn" @click="toggleTheme" :title="isDark ? '亮色模式' : '暗色模式'">
-          {{ isDark ? '☀️' : '🌙' }}
+
+      <!-- Collapse toggle -->
+      <div class="absolute bottom-4 left-0 right-0 flex justify-center">
+        <button
+          class="w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200"
+          :style="{ color: 'var(--text-muted)', border: 'none', background: 'transparent', cursor: 'pointer' }"
+          @click="collapsed = !collapsed"
+        >
+          <MenuUnfoldOutlined v-if="collapsed" />
+          <MenuFoldOutlined v-else />
         </button>
       </div>
-      <a-layout-content class="p-6 overflow-auto" :style="{ background: 'transparent' }">
-        <router-view />
+    </a-layout-sider>
+
+    <a-layout :style="{ background: 'transparent' }">
+      <!-- Header -->
+      <div
+        class="h-16 flex items-center justify-between px-8 sticky top-0 z-10"
+        :style="{
+          background: 'var(--bg-card)',
+          backdropFilter: 'blur(12px)',
+          borderBottom: '1px solid var(--border-subtle)',
+        }"
+      >
+        <div class="flex items-center gap-3">
+          <span class="text-sm font-semibold tracking-wide" :style="{ color: 'var(--text-primary)' }">{{ currentLabel() }}</span>
+          <span class="text-xs px-2 py-0.5 rounded-full" :style="{ background: 'var(--accent-soft)', color: 'var(--accent)' }">TriCore</span>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <!-- User Profile -->
+          <Popover
+            v-if="currentUser"
+            trigger="hover"
+            placement="bottomRight"
+            :overlayStyle="{ maxWidth: '300px' }"
+          >
+            <template #content>
+              <div class="min-w-56">
+                <div class="flex items-center gap-3 mb-3 pb-3 border-b" :style="{ borderColor: 'var(--border-subtle)' }">
+                  <div class="w-12 h-12 rounded-full flex items-center justify-center text-lg font-bold text-white flex-shrink-0"
+                    style="background: linear-gradient(135deg, #6c5ce7, #a78bfa)">
+                    {{ currentUser.name?.charAt(0) }}
+                  </div>
+                  <div>
+                    <p class="font-semibold text-sm" :style="{ color: 'var(--text-primary)' }">{{ currentUser.name }}</p>
+                    <p class="text-xs" :style="{ color: 'var(--text-muted)' }">{{ currentUser.position }}</p>
+                  </div>
+                </div>
+                <div class="space-y-2 text-xs">
+                  <div class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
+                    <IdcardOutlined :style="{ color: 'var(--accent)' }" />
+                    <span :style="{ color: 'var(--text-muted)' }">工号</span>
+                    <span :style="{ color: 'var(--text-primary)', fontFamily: 'ui-monospace, monospace' }">{{ currentUser.employee_no }}</span>
+                  </div>
+                  <div class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
+                    <TeamOutlined :style="{ color: 'var(--accent)' }" />
+                    <span :style="{ color: 'var(--text-muted)' }">部门</span>
+                    <Tag>{{ currentUser.department }}</Tag>
+                  </div>
+                  <div class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
+                    <MailOutlined :style="{ color: 'var(--accent)' }" />
+                    <span :style="{ color: 'var(--text-muted)' }">邮箱</span>
+                    <span :style="{ color: 'var(--text-primary)' }">{{ currentUser.email }}</span>
+                  </div>
+                  <div v-if="currentUser.phone" class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
+                    <PhoneOutlined :style="{ color: 'var(--accent)' }" />
+                    <span :style="{ color: 'var(--text-muted)' }">电话</span>
+                    <span :style="{ color: 'var(--text-primary)' }">{{ currentUser.phone }}</span>
+                  </div>
+                  <div class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
+                    <SafetyCertificateOutlined :style="{ color: 'var(--success)' }" />
+                    <span :style="{ color: 'var(--text-muted)' }">状态</span>
+                    <Tag color="green">在职</Tag>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div
+              class="flex items-center gap-2 cursor-pointer rounded-lg px-2 py-1.5 transition-all duration-200 select-none"
+              :style="{
+                border: `1px solid ${userHovered ? 'var(--border-subtle)' : 'transparent'}`,
+                background: userHovered ? 'var(--input-bg)' : 'transparent',
+              }"
+              @mouseenter="userHovered = true"
+              @mouseleave="userHovered = false"
+            >
+              <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                style="background: linear-gradient(135deg, #6c5ce7, #a78bfa)">
+                {{ currentUser.name?.charAt(0) }}
+              </div>
+              <div class="text-left leading-tight hidden sm:block">
+                <p class="text-xs font-semibold" :style="{ color: 'var(--text-primary)' }">{{ currentUser.name }}</p>
+                <p class="text-xs" :style="{ color: 'var(--text-muted)' }">{{ currentUser.department }}</p>
+              </div>
+            </div>
+          </Popover>
+
+          <!-- No user fallback -->
+          <div
+            v-else
+            class="w-8 h-8 rounded-full flex items-center justify-center"
+            :style="{ background: 'var(--input-bg)', color: 'var(--text-muted)' }"
+          >
+            <UserOutlined />
+          </div>
+
+          <button class="theme-toggle-btn" @click="toggleTheme" :title="isDark ? '切换亮色模式' : '切换暗色模式'">
+            {{ isDark ? '☀️' : '🌙' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Content -->
+      <a-layout-content :style="{ background: 'transparent' }">
+        <div class="px-8 py-6">
+          <router-view />
+        </div>
       </a-layout-content>
     </a-layout>
   </a-layout>

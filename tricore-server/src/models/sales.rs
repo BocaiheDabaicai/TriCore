@@ -52,6 +52,8 @@ pub struct Order {
     pub discount_amount: rust_decimal::Decimal,
     pub final_amount: rust_decimal::Decimal,
     pub status: String,
+    pub vehicle_info: Option<String>,
+    pub driver_info: Option<String>,
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -220,6 +222,8 @@ pub struct CreateOrderRequest {
     pub salesperson_id: Option<Uuid>,
     pub merchant_id: Option<Uuid>,
     pub discount_amount: Option<f64>,
+    pub vehicle_info: Option<String>,
+    pub driver_info: Option<String>,
     pub notes: Option<String>,
     pub items: Vec<CreateOrderItem>,
 }
@@ -234,6 +238,8 @@ pub struct CreateOrderItem {
 #[derive(Debug, Deserialize)]
 pub struct UpdateOrderStatusRequest {
     pub status: String,
+    pub vehicle_info: Option<String>,
+    pub driver_info: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

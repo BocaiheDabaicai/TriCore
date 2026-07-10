@@ -1,4 +1,5 @@
 use actix_web::{HttpResponse, web};
+use serde::Deserialize;
 use sqlx::PgPool;
 
 use crate::error::AppError;
@@ -298,19 +299,31 @@ pub async fn create_order(
     let mut tx = pool.begin().await?;
 
     let order = sqlx::query_as::<_, Order>(
-        "INSERT INTO orders (order_no, customer_id, salesperson_id, merchant_id, total_amount, discount_amount, final_amount, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *"
+        "INSERT INTO orders (order_no, customer_id, salesperson_id, merchant_id, total_amount, discount_amount, final_amount, vehicle_info, driver_info, notes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *"
     ).bind(&order_no).bind(body.customer_id).bind(body.salesperson_id)
-     .bind(body.merchant_id).bind(total_d).bind(discount_d).bind(final_d).bind(&body.notes)
+     .bind(body.merchant_id).bind(total_d).bind(discount_d).bind(final_d)
+     .bind(&body.vehicle_info).bind(&body.driver_info).bind(&body.notes)
     .fetch_one(&mut *tx).await?;
 
     for item in &body.items {
+        let product = sqlx::query_as::<_, Product>("SELECT * FROM products WHERE id = $1")
+            .bind(item.product_id).fetch_optional(&mut *tx).await?
+            .ok_or_else(|| AppError::NotFound(format!("商品 {} 不存在", item.product_id)))?;
+        if product.quantity < item.quantity {
+            return Err(AppError::BadRequest(format!("商品「{}」库存不足 (可用: {}, 需要: {})", product.name, product.quantity, item.quantity)));
+        }
+
         let sub = rust_decimal::Decimal::try_from(item.unit_price * item.quantity as f64).unwrap_or_default();
         let up = rust_decimal::Decimal::try_from(item.unit_price).unwrap_or_default();
         sqlx::query(
             "INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal) VALUES ($1,$2,$3,$4,$5)"
         ).bind(order.id).bind(item.product_id).bind(item.quantity).bind(up).bind(sub)
         .execute(&mut *tx).await?;
+
+        // Deduct inventory immediately upon order creation
+        sqlx::query("UPDATE products SET quantity = quantity - $1 WHERE id = $2")
+            .bind(item.quantity).bind(item.product_id).execute(&mut *tx).await?;
     }
 
     tx.commit().await?;
@@ -322,6 +335,37 @@ pub async fn create_order(
     Ok(HttpResponse::Created().json(ApiResponse::success(OrderWithItems { order, items })))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateOrderRequest {
+    vehicle_info: Option<String>,
+    driver_info: Option<String>,
+    notes: Option<String>,
+}
+
+pub async fn update_order(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<UpdateOrderRequest>,
+) -> Result<HttpResponse, AppError> {
+    let existing = sqlx::query_as::<_, Order>("SELECT * FROM orders WHERE id = $1")
+        .bind(*path).fetch_optional(pool.get_ref()).await?
+        .ok_or_else(|| AppError::NotFound("订单不存在".into()))?;
+
+    if existing.status != "pending" {
+        return Err(AppError::BadRequest("只有待处理的订单才能修改".into()));
+    }
+
+    let vehicle = body.vehicle_info.as_deref().or(existing.vehicle_info.as_deref());
+    let driver = body.driver_info.as_deref().or(existing.driver_info.as_deref());
+    let notes = body.notes.as_deref().or(existing.notes.as_deref());
+
+    let order = sqlx::query_as::<_, Order>(
+        "UPDATE orders SET vehicle_info=$1, driver_info=$2, notes=$3 WHERE id=$4 RETURNING *"
+    ).bind(vehicle).bind(driver).bind(notes).bind(*path)
+    .fetch_one(pool.get_ref()).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(order)))
+}
+
 pub async fn update_order_status(
     pool: web::Data<PgPool>,
     path: web::Path<uuid::Uuid>,
@@ -331,10 +375,53 @@ pub async fn update_order_status(
     if !valid.contains(&body.status.as_str()) {
         return Err(AppError::BadRequest("无效的订单状态".into()));
     }
+
+    let existing = sqlx::query_as::<_, Order>("SELECT * FROM orders WHERE id = $1")
+        .bind(*path).fetch_optional(pool.get_ref()).await?
+        .ok_or_else(|| AppError::NotFound("订单不存在".into()))?;
+
+    let vehicle = body.vehicle_info.as_deref().or(existing.vehicle_info.as_deref());
+    let driver = body.driver_info.as_deref().or(existing.driver_info.as_deref());
+
+    let mut tx = pool.begin().await?;
+
     let order = sqlx::query_as::<_, Order>(
-        "UPDATE orders SET status = $1 WHERE id = $2 RETURNING *"
-    ).bind(&body.status).bind(*path).fetch_optional(pool.get_ref()).await?
-    .ok_or_else(|| AppError::NotFound("订单不存在".into()))?;
+        "UPDATE orders SET status = $1, vehicle_info = $2, driver_info = $3 WHERE id = $4 RETURNING *"
+    ).bind(&body.status).bind(vehicle).bind(driver).bind(*path)
+    .fetch_one(&mut *tx).await?;
+
+    // When shipped: auto-create stock-out record → deduct inventory
+    if body.status == "shipped" {
+        let items = sqlx::query_as::<_, OrderItem>(
+            "SELECT * FROM order_items WHERE order_id = $1"
+        ).bind(order.id).fetch_all(&mut *tx).await?;
+
+        let warehouse = sqlx::query_as::<_, crate::models::inventory::Warehouse>(
+            "SELECT * FROM warehouses WHERE is_active = true ORDER BY name LIMIT 1"
+        ).fetch_optional(&mut *tx).await?
+        .ok_or_else(|| AppError::BadRequest("没有可用的仓库".into()))?;
+
+        let operator_id = existing.salesperson_id.unwrap_or(existing.customer_id);
+        let stock_out_no = format!("SOUT-{}-{:06}", chrono::Utc::now().format("%Y%m%d"), rand::random::<u16>() % 10000);
+
+        let stock_out = sqlx::query_as::<_, crate::models::inventory::StockOutRecord>(
+            "INSERT INTO stock_out_records (stock_out_no, order_id, warehouse_id, operator_id, vehicle_info, driver_info, notes, status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'completed') RETURNING *"
+        ).bind(&stock_out_no).bind(order.id).bind(warehouse.id).bind(operator_id)
+         .bind(&order.vehicle_info).bind(&order.driver_info).bind("订单发货自动生成出库单")
+        .fetch_one(&mut *tx).await?;
+
+        for item in &items {
+            let up_d = item.unit_price;
+            sqlx::query(
+                "INSERT INTO stock_out_items (stock_out_id, product_id, quantity, unit_price) VALUES ($1,$2,$3,$4)"
+            ).bind(stock_out.id).bind(item.product_id).bind(item.quantity).bind(up_d)
+            .execute(&mut *tx).await?;
+            // Inventory already deducted at order creation; stock-out is for tracking only.
+        }
+    }
+
+    tx.commit().await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(order)))
 }
 

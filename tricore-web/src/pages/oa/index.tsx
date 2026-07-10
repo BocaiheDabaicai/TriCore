@@ -2,11 +2,10 @@ import { useEffect, useState } from 'react'
 import { Table, Tag, Button, Modal, Input, Select, message, Spin, Tabs, Space } from 'antd'
 import { PlusOutlined, EyeOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { oaAPI } from '../../services/api'
+import type { TabsProps } from 'antd'
 
 const statusColors: Record<string, string> = { pending: 'default', in_progress: 'blue', approved: 'green', rejected: 'red', archived: 'purple' }
-const s = { color: 'var(--text-secondary)' }
-const sm = { color: 'var(--text-muted)' }
-const tp = { color: 'var(--text-primary)' }
+const statusLabels: Record<string, string> = { pending: '待提交', in_progress: '审批中', approved: '已通过', rejected: '已退回', archived: '已归档' }
 
 export default function OADashboard() {
   const [employees, setEmployees] = useState<any[]>([])
@@ -18,6 +17,7 @@ export default function OADashboard() {
   const [selectedWf, setSelectedWf] = useState<any>(null)
   const [reviewForm, setReviewForm] = useState({ action: 'approve', comment: '' })
   const [wfForm, setWfForm] = useState({ title: '', description: '', reviewer_id: '' })
+  const [activeTab, setActiveTab] = useState('workflows')
 
   const loadData = async () => {
     setLoading(true)
@@ -48,71 +48,96 @@ export default function OADashboard() {
   }
 
   const wfColumns = [
-    { title: '流程标题', dataIndex: 'title', key: 'title', render: (v: string) => <span className="font-medium" style={tp}>{v}</span> },
-    { title: '状态', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={statusColors[v] || 'default'}>{v === 'in_progress' ? '审批中' : v === 'pending' ? '待提交' : v === 'approved' ? '已通过' : v === 'rejected' ? '已退回' : v}</Tag> },
-    { title: '当前步骤', key: 'step', render: (_: any, r: any) => <span style={s}>{r.current_step}/{r.total_steps}</span> },
-    { title: '时间', dataIndex: 'created_at', key: 'time', render: (v: string) => <span className="text-xs" style={sm}>{new Date(v).toLocaleDateString('zh-CN')}</span> },
-    { title: '操作', key: 'action', render: (_: any, r: any) => (
-      <Space>
-        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDetail(r.id)}>详情</Button>
-        {r.status === 'in_progress' && <Button type="link" size="small" icon={<CheckCircleOutlined />} onClick={async () => { await openDetail(r.id); setReviewModal(true) }}>审核</Button>}
-      </Space>
-    )},
+    { title: '流程标题', dataIndex: 'title', key: 'title',
+      render: (v: string) => <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{v}</span> },
+    { title: '状态', dataIndex: 'status', key: 'status', width: 100,
+      render: (v: string) => <Tag color={statusColors[v] || 'default'}>{statusLabels[v] || v}</Tag> },
+    { title: '进度', key: 'step', width: 80,
+      render: (_: any, r: any) => <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{r.current_step}/{r.total_steps}</span> },
+    { title: '创建时间', dataIndex: 'created_at', key: 'time', width: 120,
+      render: (v: string) => <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{new Date(v).toLocaleDateString('zh-CN')}</span> },
+    { title: '操作', key: 'action', width: 140,
+      render: (_: any, r: any) => (
+        <Space size={4}>
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => openDetail(r.id)}>详情</Button>
+          {r.status === 'in_progress' && <Button type="link" size="small" icon={<CheckCircleOutlined />} onClick={async () => { await openDetail(r.id); setReviewModal(true) }}>审核</Button>}
+        </Space>
+      )},
   ]
 
   const empColumns = [
-    { title: '工号', dataIndex: 'employee_no', key: 'no', render: (v: string) => <span className="text-indigo-500 font-mono text-xs">{v}</span> },
-    { title: '姓名', dataIndex: 'name', key: 'name' },
-    { title: '部门', dataIndex: 'department', key: 'dept', render: (v: string) => <Tag>{v}</Tag> },
+    { title: '工号', dataIndex: 'employee_no', key: 'no', width: 100,
+      render: (v: string) => <span style={{ color: 'var(--accent)', fontFamily: 'ui-monospace, monospace', fontSize: 12, fontWeight: 500 }}>{v}</span> },
+    { title: '姓名', dataIndex: 'name', key: 'name',
+      render: (v: string) => <span style={{ fontWeight: 500 }}>{v}</span> },
+    { title: '部门', dataIndex: 'department', key: 'dept', width: 100,
+      render: (v: string) => <Tag>{v}</Tag> },
     { title: '职位', dataIndex: 'position', key: 'pos' },
-    { title: '邮箱', dataIndex: 'email', key: 'email', render: (v: string) => <span className="text-xs" style={sm}>{v}</span> },
+    { title: '邮箱', dataIndex: 'email', key: 'email',
+      render: (v: string) => <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{v}</span> },
+  ]
+
+  const tabItems: TabsProps['items'] = [
+    { key: 'workflows', label: `审批流程 (${workflows.length})`,
+      children: <>
+        <div className="mb-3"><Button type="primary" icon={<PlusOutlined />} onClick={() => setWfModal(true)}>新建流程</Button></div>
+        <Table columns={wfColumns} dataSource={workflows} rowKey="id" size="small" locale={{ emptyText: '暂无数据' }} pagination={{ pageSize: 10, showSizeChanger: false }} />
+      </> },
+    { key: 'employees', label: `员工列表 (${employees.length})`,
+      children: <Table columns={empColumns} dataSource={employees} rowKey="id" size="small" locale={{ emptyText: '暂无数据' }} pagination={{ pageSize: 10, showSizeChanger: false }} /> },
   ]
 
   return (
     <div>
-      <h2 className="text-2xl font-bold mb-2 gradient-text">办公协同</h2>
-      <p className="text-sm mb-6" style={sm}>流程审批 · 员工管理 · 归档查阅</p>
+      <div className="page-header">
+        <h2 className="gradient-text">办公协同</h2>
+        <p>流程审批 · 员工管理 · 归档查阅</p>
+      </div>
       <Spin spinning={loading}>
-        <div className="glass-card p-4">
-          <Tabs items={[
-            { key: 'workflows', label: <span>🔄 审批流程 <span className="text-xs ml-1" style={sm}>({workflows.length})</span></span>,
-              children: <><div className="mb-3"><Button type="primary" icon={<PlusOutlined />} onClick={() => setWfModal(true)}>新建流程</Button></div>
-              <Table columns={wfColumns} dataSource={workflows} rowKey="id" size="middle" locale={{ emptyText: <span style={sm}>暂无数据</span> }} pagination={{ pageSize: 10 }} /></> },
-            { key: 'employees', label: <span>👥 员工列表 <span className="text-xs ml-1" style={sm}>({employees.length})</span></span>,
-              children: <Table columns={empColumns} dataSource={employees} rowKey="id" size="middle" locale={{ emptyText: <span style={sm}>暂无数据</span> }} pagination={{ pageSize: 10 }} /> },
-          ]} />
+        <div className="glass-card p-5">
+          <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
         </div>
       </Spin>
 
-      <Modal title="新建审批流程" open={wfModal} onCancel={() => setWfModal(false)} onOk={handleCreateWf} okText="创建" cancelText="取消">
+      <Modal title="新建审批流程" open={wfModal} onCancel={() => setWfModal(false)} onOk={handleCreateWf} okText="创建" cancelText="取消" width={480}>
         <div className="space-y-3 py-2">
-          <div><label className="text-sm mb-1 block" style={s}>流程标题</label><Input value={wfForm.title} onChange={(e) => setWfForm({ ...wfForm, title: e.target.value })} placeholder="例如：采购申请" /></div>
-          <div><label className="text-sm mb-1 block" style={s}>描述</label><Input.TextArea value={wfForm.description} onChange={(e) => setWfForm({ ...wfForm, description: e.target.value })} rows={2} placeholder="流程说明" /></div>
-          <div><label className="text-sm mb-1 block" style={s}>第一审核人</label><Select className="w-full" value={wfForm.reviewer_id || undefined} onChange={(v) => setWfForm({ ...wfForm, reviewer_id: v })} placeholder="选择员工" options={employees.map((e: any) => ({ value: e.id, label: `${e.name} (${e.department})` }))} /></div>
+          <div><label className="text-xs mb-1.5 block font-medium" style={{ color: 'var(--text-secondary)' }}>流程标题</label><Input value={wfForm.title} onChange={(e) => setWfForm({ ...wfForm, title: e.target.value })} placeholder="例如：采购申请" /></div>
+          <div><label className="text-xs mb-1.5 block font-medium" style={{ color: 'var(--text-secondary)' }}>描述</label><Input.TextArea value={wfForm.description} onChange={(e) => setWfForm({ ...wfForm, description: e.target.value })} rows={2} placeholder="流程说明" /></div>
+          <div><label className="text-xs mb-1.5 block font-medium" style={{ color: 'var(--text-secondary)' }}>第一审核人</label><Select className="w-full" value={wfForm.reviewer_id || undefined} onChange={(v) => setWfForm({ ...wfForm, reviewer_id: v })} placeholder="选择员工" options={employees.map((e: any) => ({ value: e.id, label: `${e.name} (${e.department})` }))} /></div>
         </div>
       </Modal>
 
-      <Modal title={`流程详情 — ${selectedWf?.title || ''}`} open={detailModal} onCancel={() => { setDetailModal(false); setSelectedWf(null) }} footer={null} width={640}>
+      <Modal title={`流程详情 — ${selectedWf?.title || ''}`} open={detailModal} onCancel={() => { setDetailModal(false); setSelectedWf(null) }} footer={null} width={560}>
         {selectedWf && (
           <div className="space-y-4 py-2">
-            <div className="text-sm"><span style={sm}>状态：</span><Tag color={statusColors[selectedWf.status]}>{selectedWf.status}</Tag></div>
-            <p style={s}>{selectedWf.description || '无描述'}</p>
-            {selectedWf.steps?.map((step: any, i: number) => (
-              <div key={i} className="flex items-center gap-3 py-2 border-b text-sm" style={{ borderColor: 'var(--border-subtle)' }}>
-                <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs" style={{ background: 'var(--input-bg)' }}>{step.step_number}</span>
-                <span className="flex-1" style={s}>{step.reviewer_id?.slice(0, 8)}...</span>
-                <Tag color={step.status === 'approved' ? 'green' : step.status === 'rejected' ? 'red' : 'default'}>{step.status}</Tag>
-                {step.comment && <span className="text-xs" style={sm}>"{step.comment}"</span>}
+            <div className="flex items-center gap-3 text-sm">
+              <span style={{ color: 'var(--text-muted)' }}>状态</span>
+              <Tag color={statusColors[selectedWf.status]}>{statusLabels[selectedWf.status] || selectedWf.status}</Tag>
+            </div>
+            <p style={{ color: 'var(--text-secondary)' }}>{selectedWf.description || '无描述'}</p>
+            <div>
+              <p className="text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>审批步骤</p>
+              <div className="rounded-lg overflow-hidden border" style={{ borderColor: 'var(--border-subtle)' }}>
+                {selectedWf.steps?.map((step: any, i: number) => (
+                  <div key={i} className="flex items-center gap-3 px-4 py-2.5 text-sm"
+                    style={{ background: i % 2 === 0 ? 'transparent' : 'var(--input-bg)' }}>
+                    <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium"
+                      style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>{step.step_number}</span>
+                    <span className="flex-1" style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{step.reviewer_id?.slice(0, 8)}...</span>
+                    <Tag color={step.status === 'approved' ? 'green' : step.status === 'rejected' ? 'red' : 'default'}>{step.status}</Tag>
+                    {step.comment && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>"{step.comment}"</span>}
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
           </div>
         )}
       </Modal>
 
-      <Modal title="审批操作" open={reviewModal} onCancel={() => setReviewModal(false)} onOk={handleReview} okText="提交" cancelText="取消">
+      <Modal title="审批操作" open={reviewModal} onCancel={() => setReviewModal(false)} onOk={handleReview} okText="提交" cancelText="取消" width={420}>
         <div className="space-y-3 py-2">
-          <div><label className="text-sm mb-1 block" style={s}>操作</label><Select className="w-full" value={reviewForm.action} onChange={(v) => setReviewForm({ ...reviewForm, action: v })} options={[{ value: 'approve', label: '✅ 通过' }, { value: 'reject', label: '❌ 退回' }]} /></div>
-          <div><label className="text-sm mb-1 block" style={s}>备注</label><Input.TextArea value={reviewForm.comment} onChange={(e) => setReviewForm({ ...reviewForm, comment: e.target.value })} rows={3} placeholder="审核意见..." /></div>
+          <div><label className="text-xs mb-1.5 block font-medium" style={{ color: 'var(--text-secondary)' }}>操作</label><Select className="w-full" value={reviewForm.action} onChange={(v) => setReviewForm({ ...reviewForm, action: v })} options={[{ value: 'approve', label: '通过' }, { value: 'reject', label: '退回' }]} /></div>
+          <div><label className="text-xs mb-1.5 block font-medium" style={{ color: 'var(--text-secondary)' }}>备注</label><Input.TextArea value={reviewForm.comment} onChange={(e) => setReviewForm({ ...reviewForm, comment: e.target.value })} rows={3} placeholder="审核意见..." /></div>
         </div>
       </Modal>
     </div>

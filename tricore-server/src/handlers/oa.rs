@@ -99,6 +99,19 @@ pub async fn update_employee(
     Ok(HttpResponse::Ok().json(ApiResponse::success(emp)))
 }
 
+pub async fn delete_employee(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let emp = sqlx::query_as::<_, Employee>("SELECT * FROM employees WHERE id = $1")
+        .bind(*path).fetch_optional(pool.get_ref()).await?
+        .ok_or_else(|| AppError::NotFound("员工不存在".into()))?;
+
+    sqlx::query("DELETE FROM employees WHERE id = $1")
+        .bind(emp.id).execute(pool.get_ref()).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::<String>::message("员工已删除")))
+}
+
 // ═══════════════════════════════════════════════════════════
 // WORKFLOWS
 // ═══════════════════════════════════════════════════════════
@@ -206,8 +219,8 @@ pub async fn update_workflow(
         .bind(*path).fetch_optional(pool.get_ref()).await?
         .ok_or_else(|| AppError::NotFound("流程不存在".into()))?;
 
-    if existing.status != "rejected" {
-        return Err(AppError::BadRequest("只有被退回的流程才能修改".into()));
+    if existing.status != "rejected" && existing.status != "pending" {
+        return Err(AppError::BadRequest("当前状态不可修改".into()));
     }
 
     let title = body.title.as_deref().unwrap_or(&existing.title);
@@ -247,6 +260,28 @@ pub async fn submit_workflow(
     ).bind(*path).fetch_all(pool.get_ref()).await?;
 
     Ok(HttpResponse::Ok().json(ApiResponse::success(WorkflowWithSteps { workflow: wf, steps })))
+}
+
+pub async fn delete_workflow(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let existing = sqlx::query_as::<_, WorkflowForm>("SELECT * FROM workflow_forms WHERE id = $1")
+        .bind(*path).fetch_optional(pool.get_ref()).await?
+        .ok_or_else(|| AppError::NotFound("流程不存在".into()))?;
+
+    if existing.status != "pending" && existing.status != "rejected" {
+        return Err(AppError::BadRequest("只能删除待提交或已退回的流程".into()));
+    }
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM workflow_steps WHERE workflow_id = $1")
+        .bind(*path).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM workflow_forms WHERE id = $1")
+        .bind(*path).execute(&mut *tx).await?;
+    tx.commit().await?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::<String>::message("流程已删除")))
 }
 
 pub async fn get_steps(
