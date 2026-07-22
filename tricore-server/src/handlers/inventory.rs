@@ -61,6 +61,16 @@ pub async fn update_warehouse(
     Ok(HttpResponse::Ok().json(ApiResponse::success(wh)))
 }
 
+pub async fn delete_warehouse(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let rows = sqlx::query("DELETE FROM warehouses WHERE id = $1")
+        .bind(*path).execute(pool.get_ref()).await?.rows_affected();
+    if rows == 0 { return Err(AppError::NotFound("仓库不存在".into())); }
+    Ok(HttpResponse::Ok().json(ApiResponse::<String>::message("已删除")))
+}
+
 // ═══════════════════════════════════════════════════════════
 // STOCK IN
 // ═══════════════════════════════════════════════════════════

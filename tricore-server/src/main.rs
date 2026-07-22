@@ -1,3 +1,4 @@
+mod auth;
 mod config;
 mod db;
 mod error;
@@ -21,13 +22,17 @@ async fn main() -> std::io::Result<()> {
 
     info!("TriCore Server starting on {}:{}", cfg.server_host, cfg.server_port);
 
+    let jwt_secret = cfg.jwt_secret.clone();
+
     HttpServer::new(move || {
         let cors = Cors::permissive();
 
         App::new()
             .wrap(cors)
             .wrap(middleware::Logger::default())
+            .wrap(middleware::from_fn(auth::auth_middleware))
             .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(jwt_secret.clone()))
             .configure(routes::configure)
     })
     .bind(format!("{}:{}", cfg.server_host, cfg.server_port))?

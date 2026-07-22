@@ -4,8 +4,6 @@ use crate::handlers::sales;
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/sales")
-            // Auth
-            .route("/auth/login", web::post().to(sales::login))
             // Users
             .route("/users", web::get().to(sales::list_users))
             .route("/users/{id}", web::get().to(sales::get_user))
@@ -31,6 +29,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/returns/{id}", web::get().to(sales::get_return))
             .route("/returns", web::post().to(sales::create_return))
             .route("/returns/{id}/status", web::patch().to(sales::update_return_status))
+            // Categories
+            .route("/categories", web::get().to(sales::list_categories))
+            .route("/categories/{id}", web::get().to(sales::get_category))
+            .route("/categories", web::post().to(sales::create_category))
+            .route("/categories/{id}", web::put().to(sales::update_category))
+            .route("/categories/{id}", web::delete().to(sales::delete_category))
             // Dashboard
             .route("/dashboard", web::get().to(sales::dashboard)),
     );

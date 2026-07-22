@@ -2,26 +2,49 @@
 import { ref, onMounted, h, computed } from 'vue'
 import { Table, Tag, Button, Modal, Input, InputNumber, Select, message, Spin, Tabs, Space } from 'ant-design-vue'
 import { PlusOutlined, EyeOutlined, DeleteOutlined, ShoppingCartOutlined } from '@ant-design/icons-vue'
-import { salesAPI } from '@/services/api'
+import { salesAPI, masterDataAPI } from '@/services/api'
 
 const loading = ref(true)
 const products = ref<any[]>([])
 const orders = ref<any[]>([])
 const users = ref<any[]>([])
+const catList = ref<any[]>([])
+const mdCustomers = ref<any[]>([])
+const mdVehicles = ref<any[]>([])
 const activeTab = ref('orders')
 
 // ── Product form ──
 const modalOpen = ref(false)
 const editing = ref<any>(null)
 const form = ref({ sku: '', name: '', original_price: 0, category: '', description: '' })
-const categories = ['电子产品', '日用品', '食品', '服装', '办公用品', '医疗', '运动']
+
+const generateSku = () => {
+  const today = new Date()
+  const dateStr = today.getFullYear().toString() +
+    String(today.getMonth() + 1).padStart(2, '0') +
+    String(today.getDate()).padStart(2, '0')
+  const count = products.value.length + 1
+  return `SKU${dateStr}${String(count).padStart(4, '0')}`
+}
+
+const categoryOptions = computed(() =>
+  catList.value.map((c: any) => ({ value: c.name, label: c.name }))
+)
+
+// ── Category form ──
+const catModalOpen = ref(false)
+const catEditing = ref<any>(null)
+const catForm = ref({ name: '', description: '' })
+const catSaving = ref(false)
 
 // ── Order create / edit ──
 const orderModal = ref(false)
 const editOrderModal = ref(false)
 const editingOrder = ref<any>(null)
 const orderItems = ref<{ product_id: string; quantity: number; unit_price: number }[]>([])
-const orderForm = ref({ customer_id: '', notes: '', discount_amount: 0, vehicle_info: '', driver_info: '' })
+type Discount = { mode: 'percent' | 'fixed'; value: number; note: string }
+const discounts = ref<Discount[]>([])
+const orderForm = ref({ customer_id: '', notes: '', vehicle_id: '', vehicle_info: '', driver_info: '' })
 const orderSaving = ref(false)
 
 // ── Order detail ──
@@ -30,7 +53,7 @@ const selectedOrder = ref<any>(null)
 
 // ── Status change ──
 const statusModal = ref(false)
-const statusForm = ref({ status: '', vehicle_info: '', driver_info: '' })
+const statusForm = ref({ status: '' })
 
 const statusColors: Record<string, string> = { pending: 'default', confirmed: 'blue', processing: 'purple', shipped: 'cyan', delivered: 'green', cancelled: 'red' }
 const statusLabels: Record<string, string> = { pending: '待处理', confirmed: '已确认', processing: '处理中', shipped: '已发货', delivered: '已交付', cancelled: '已取消' }
@@ -48,30 +71,56 @@ const userMap = computed(() => {
   const m = new Map<string, any>(); for (const u of users.value) m.set(u.id, u); return m
 })
 const customerOptions = computed(() =>
-  users.value.filter((u: any) => u.role === 'customer').map((u: any) => ({ value: u.id, label: `${u.full_name} (${u.username})` }))
+  mdCustomers.value.map((c: any) => ({ value: c.id, label: `${c.name}${c.phone ? ` (${c.phone})` : ''}` }))
+)
+const vehicleOptions = computed(() =>
+  mdVehicles.value.filter((v: any) => v.status !== 'maintenance').map((v: any) => ({
+    value: v.id,
+    label: `${v.plate_number}${v.model ? ` · ${v.model}` : ''}${v.driver_name ? ` · ${v.driver_name}` : ''}`,
+    driver_name: v.driver_name,
+    driver_phone: v.driver_phone,
+    plate_number: v.plate_number,
+  }))
 )
 const productOptions = computed(() =>
   products.value.map((p: any) => ({ value: p.id, label: `${p.name} (${p.sku}) — ¥${Number(p.original_price).toFixed(2)} · 库存: ${p.quantity}` }))
 )
 
+const customerMap = computed(() => {
+  const m = new Map<string, any>(); for (const c of mdCustomers.value) m.set(c.id, c); return m
+})
+
 const orderTotal = computed(() =>
   orderItems.value.reduce((sum, i) => sum + i.unit_price * i.quantity, 0)
 )
-const orderFinal = computed(() =>
-  Math.max(0, orderTotal.value - (orderForm.value.discount_amount || 0))
+const totalDiscount = computed(() =>
+  discounts.value.reduce((sum, d) => {
+    if (d.mode === 'percent') return sum + orderTotal.value * (d.value || 0) / 100
+    return sum + (d.value || 0)
+  }, 0)
 )
+const orderFinal = computed(() => Math.max(0, orderTotal.value - totalDiscount.value))
+
+const addDiscount = () => discounts.value.push({ mode: 'percent', value: 0, note: '' })
+const removeDiscount = (i: number) => discounts.value.splice(i, 1)
 
 const load = async () => {
   loading.value = true
   try {
-    const [p, o, u]: any[] = await Promise.all([
+    const [p, o, u, c, mc, mv]: any[] = await Promise.all([
       salesAPI.listProducts({ per_page: 200 }),
       salesAPI.listOrders({ per_page: 100 }),
       salesAPI.listUsers({ per_page: 200 }).catch(() => ({ data: [] })),
+      salesAPI.listCategories().catch(() => ({ data: [] })),
+      masterDataAPI.listCustomers().catch(() => ({ data: [] })),
+      masterDataAPI.listVehicles().catch(() => ({ data: [] })),
     ])
     products.value = p?.data?.data || p?.data || []
     orders.value = o?.data?.data || o?.data || []
     users.value = u?.data?.data || u?.data || []
+    catList.value = c?.data || []
+    mdCustomers.value = (mc as any).data || []
+    mdVehicles.value = (mv as any).data || []
   } catch { message.error('加载失败') } finally { loading.value = false }
 }
 onMounted(load)
@@ -88,6 +137,34 @@ const handleSave = async () => {
   } catch { message.error('操作失败') }
 }
 
+// ── Category CRUD ──
+const openCatCreate = () => {
+  catEditing.value = null
+  catForm.value = { name: '', description: '' }
+  catModalOpen.value = true
+}
+const openCatEdit = (record: any) => {
+  catEditing.value = record
+  catForm.value = { name: record.name, description: record.description || '' }
+  catModalOpen.value = true
+}
+const handleCatSave = async () => {
+  if (!catForm.value.name.trim()) { message.warning('请输入分类名称'); return }
+  catSaving.value = true
+  try {
+    if (catEditing.value) { await salesAPI.updateCategory(catEditing.value.id, catForm.value); message.success('已更新') }
+    else { await salesAPI.createCategory(catForm.value); message.success('已创建') }
+    catModalOpen.value = false
+    load()
+  } catch { message.error('操作失败') } finally { catSaving.value = false }
+}
+const handleCatDelete = (record: any) => {
+  Modal.confirm({
+    title: '确认删除', content: `确定要删除分类「${record.name}」吗？`, okText: '确认删除', okType: 'danger', cancelText: '取消',
+    onOk: async () => { try { await salesAPI.deleteCategory(record.id); message.success('已删除'); load() } catch { message.error('删除失败') } },
+  })
+}
+
 // ── Order item management ──
 const addOrderItem = () => orderItems.value.push({ product_id: '', quantity: 1, unit_price: 0 })
 const removeOrderItem = (i: number) => {
@@ -99,21 +176,31 @@ const onProductSelect = (i: number, pid: string) => {
   if (p) orderItems.value[i].unit_price = Number(p.original_price)
 }
 
+const onVehicleSelect = (vid: string) => {
+  const v = vehicleOptions.value.find((x: any) => x.value === vid)
+  if (v) {
+    orderForm.value.vehicle_info = v.plate_number
+    orderForm.value.driver_info = [v.driver_name, v.driver_phone].filter(Boolean).join(' / ')
+  }
+}
+
 const openOrderCreate = () => {
   editingOrder.value = null
-  orderForm.value = { customer_id: '', notes: '', discount_amount: 0, vehicle_info: '', driver_info: '' }
+  orderForm.value = { customer_id: '', notes: '', vehicle_id: '', vehicle_info: '', driver_info: '' }
   orderItems.value = [{ product_id: '', quantity: 1, unit_price: 0 }]
+  discounts.value = []
   orderModal.value = true
 }
 
 const openOrderEdit = (record: any) => {
   editingOrder.value = record
   orderForm.value = {
-    customer_id: record.customer_id, notes: record.notes || '', discount_amount: Number(record.discount_amount),
-    vehicle_info: record.vehicle_info || '', driver_info: record.driver_info || '',
+    customer_id: record.customer_id, notes: record.notes || '',
+    vehicle_id: '', vehicle_info: record.vehicle_info || '', driver_info: record.driver_info || '',
   }
   orderItems.value = (record.items || []).map((i: any) => ({ product_id: i.product_id, quantity: i.quantity, unit_price: Number(i.unit_price) }))
   if (orderItems.value.length === 0) orderItems.value = [{ product_id: '', quantity: 1, unit_price: 0 }]
+  discounts.value = []
   editOrderModal.value = true
 }
 
@@ -125,7 +212,7 @@ const handleCreateOrder = async () => {
     await salesAPI.createOrder({
       customer_id: orderForm.value.customer_id,
       notes: orderForm.value.notes || undefined,
-      discount_amount: orderForm.value.discount_amount || 0,
+      discount_amount: totalDiscount.value,
       vehicle_info: orderForm.value.vehicle_info || undefined,
       driver_info: orderForm.value.driver_info || undefined,
       items: orderItems.value.map((i) => ({ product_id: i.product_id, quantity: i.quantity, unit_price: i.unit_price })),
@@ -160,18 +247,14 @@ const openOrderDetail = async (id: string) => {
 // ── Status change ──
 const openStatusChange = (order: any) => {
   selectedOrder.value = order
-  statusForm.value = { status: '', vehicle_info: order.vehicle_info || '', driver_info: order.driver_info || '' }
+  statusForm.value = { status: '' }
   statusModal.value = true
 }
 
 const handleStatusChange = async () => {
   if (!statusForm.value.status) { message.warning('请选择状态'); return }
   try {
-    await salesAPI.updateOrderStatus(selectedOrder.value.id, {
-      status: statusForm.value.status,
-      vehicle_info: statusForm.value.vehicle_info || undefined,
-      driver_info: statusForm.value.driver_info || undefined,
-    })
+    await salesAPI.updateOrderStatus(selectedOrder.value.id, { status: statusForm.value.status })
     message.success('状态已更新')
     statusModal.value = false
     load()
@@ -184,8 +267,8 @@ const orderCols = [
     customRender: ({ text }: any) => h('span', { style: { fontFamily: 'ui-monospace, monospace', fontSize: '12px', color: 'var(--text-secondary)' } }, text) },
   { title: '客户', key: 'customer', width: 100,
     customRender: ({ record }: any) => {
-      const u = userMap.value.get(record.customer_id)
-      return h('span', { style: { color: 'var(--text-primary)', fontWeight: 500 } }, u?.full_name || '—')
+      const c = customerMap.value.get(record.customer_id)
+      return h('span', { style: { color: 'var(--text-primary)', fontWeight: 500 } }, c?.name || '—')
     }},
   { title: '金额', dataIndex: 'final_amount', key: 'amt', width: 110,
     customRender: ({ text }: any) => h('span', { style: { color: '#f59e0b', fontFamily: 'ui-monospace, monospace', fontWeight: 600 } }, `¥${Number(text).toFixed(2)}`) },
@@ -229,6 +312,20 @@ const productCols = [
     customRender: ({ record }: any) =>
       h(Button, { type: 'link', size: 'small', onClick: () => { editing.value = record; form.value = { sku: record.sku, name: record.name, original_price: Number(record.original_price), category: record.category || '', description: record.description || '' }; modalOpen.value = true } }, () => '编辑') },
 ]
+
+const catCols = [
+  { title: '名称', dataIndex: 'name', key: 'name',
+    customRender: ({ text }: any) => h('span', { style: { fontWeight: 600, color: 'var(--text-primary)' } }, text) },
+  { title: '描述', dataIndex: 'description', key: 'desc', ellipsis: true,
+    customRender: ({ text }: any) => text || h('span', { style: { color: 'var(--text-muted)' } }, '—') },
+  { title: '状态', dataIndex: 'is_active', key: 'active', width: 80,
+    customRender: ({ text }: any) => h(Tag, { color: text ? 'green' : 'default' }, () => text ? '启用' : '禁用') },
+  { title: '操作', key: 'action', width: 110,
+    customRender: ({ record }: any) => h(Space, { size: 4 }, () => [
+      h(Button, { type: 'link', size: 'small', onClick: () => openCatEdit(record) }, () => '编辑'),
+      h(Button, { type: 'link', size: 'small', danger: true, onClick: () => handleCatDelete(record) }, () => [h(DeleteOutlined)]),
+    ])},
+]
 </script>
 
 <template>
@@ -250,8 +347,16 @@ const productCols = [
 
           <!-- ═══ Products tab ═══ -->
           <a-tab-pane key="products" :tab="`商品管理 (${products.length})`">
-            <div class="mb-3"><Button type="primary" @click="() => { editing = null; form = { sku: '', name: '', original_price: 0, category: '', description: '' }; modalOpen = true }"><PlusOutlined /> 新增商品</Button></div>
+            <div class="mb-3"><Button type="primary" @click="() => { editing = null; form = { sku: generateSku(), name: '', original_price: 0, category: '', description: '' }; modalOpen = true }"><PlusOutlined /> 新增商品</Button></div>
             <Table :columns="productCols" :dataSource="products" rowKey="id" size="small" :pagination="{ pageSize: 10, showSizeChanger: false }">
+              <template #emptyText>暂无数据</template>
+            </Table>
+          </a-tab-pane>
+
+          <!-- ═══ Categories tab ═══ -->
+          <a-tab-pane key="categories" :tab="`商品分类 (${catList.length})`">
+            <div class="mb-3"><Button type="primary" @click="openCatCreate"><PlusOutlined /> 添加分类</Button></div>
+            <Table :columns="catCols" :dataSource="catList" rowKey="id" size="small" :pagination="{ pageSize: 10, showSizeChanger: false }">
               <template #emptyText>暂无数据</template>
             </Table>
           </a-tab-pane>
@@ -260,18 +365,24 @@ const productCols = [
     </Spin>
 
     <!-- ═══ Create Order modal ═══ -->
-    <Modal v-model:open="orderModal" title="创建订单" @ok="handleCreateOrder" :confirmLoading="orderSaving" okText="创建订单" cancelText="取消" :width="700">
+    <Modal v-model:open="orderModal" title="创建订单" @ok="handleCreateOrder" :confirmLoading="orderSaving" okText="创建订单" cancelText="取消" :width="880">
       <div class="space-y-4 py-2">
-        <!-- Header -->
+        <!-- Customer + Vehicle -->
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">客户 <span :style="{ color: 'var(--danger)' }">*</span></label>
             <Select v-model:value="orderForm.customer_id" class="w-full" placeholder="选择客户" :options="customerOptions" showSearch />
           </div>
           <div>
-            <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">折扣金额</label>
-            <InputNumber v-model:value="orderForm.discount_amount" class="w-full" :min="0" :step="0.01" />
+            <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">配送车辆</label>
+            <Select v-model:value="orderForm.vehicle_id" class="w-full" placeholder="选择车辆" :options="vehicleOptions" showSearch allowClear @change="(v: string) => onVehicleSelect(v)" />
           </div>
+        </div>
+
+        <!-- Vehicle info (auto-filled) -->
+        <div v-if="orderForm.vehicle_info" class="flex items-center gap-4 p-2.5 rounded-lg text-xs" :style="{ background: 'var(--input-bg)' }">
+          <span :style="{ color: 'var(--text-muted)' }">车牌: <b :style="{ color: 'var(--accent)', fontFamily: 'ui-monospace, monospace' }">{{ orderForm.vehicle_info }}</b></span>
+          <span :style="{ color: 'var(--text-muted)' }">司机: <b :style="{ color: 'var(--text-primary)' }">{{ orderForm.driver_info || '—' }}</b></span>
         </div>
 
         <!-- Items -->
@@ -284,32 +395,49 @@ const productCols = [
             <div v-for="(item, i) in orderItems" :key="i" class="flex items-center gap-2 p-2 rounded-lg" :style="{ background: 'var(--input-bg)', border: '1px solid var(--border-subtle)' }">
               <span class="text-xs font-bold flex-shrink-0 min-w-5" :style="{ color: 'var(--text-muted)' }">#{{ i + 1 }}</span>
               <Select v-model:value="item.product_id" class="flex-1" placeholder="选择商品" :options="productOptions" showSearch @change="(v: string) => onProductSelect(i, v)" />
-              <InputNumber v-model:value="item.quantity" :min="1" :max="999" style="width:80px" placeholder="数量" />
-              <InputNumber v-model:value="item.unit_price" :min="0" :step="0.01" style="width:110px" placeholder="单价" />
-              <span class="text-xs font-mono flex-shrink-0 min-w-16 text-right" :style="{ color: '#f59e0b', fontWeight: 600 }">¥{{ (item.unit_price * item.quantity).toFixed(2) }}</span>
+              <InputNumber v-model:value="item.quantity" :min="1" style="width:100px" placeholder="数量" />
+              <span class="text-xs flex-shrink-0" :style="{ color: 'var(--text-secondary)', fontFamily: 'ui-monospace, monospace', minWidth: '70px', textAlign: 'right' }">¥{{ item.unit_price.toFixed(2) }}</span>
+              <span class="text-xs font-mono flex-shrink-0" :style="{ color: '#f59e0b', fontWeight: 600, minWidth: '70px', textAlign: 'right' }">¥{{ (item.unit_price * item.quantity).toFixed(2) }}</span>
               <Button type="text" size="small" danger @click="removeOrderItem(i)"><DeleteOutlined /></Button>
             </div>
+          </div>
+        </div>
+
+        <!-- Discounts -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-xs font-medium" :style="{ color: 'var(--text-secondary)' }">优惠方式</label>
+            <Button type="link" size="small" @click="addDiscount"><PlusOutlined /> 添加优惠</Button>
+          </div>
+          <div v-if="discounts.length === 0" class="text-xs p-2 text-center rounded" :style="{ color: 'var(--text-muted)', background: 'var(--input-bg)' }">暂未添加优惠</div>
+          <div v-for="(d, i) in discounts" :key="i" class="flex items-center gap-2 p-2 rounded-lg" :style="{ background: 'var(--input-bg)', border: '1px solid var(--border-subtle)' }">
+            <span class="text-xs font-bold flex-shrink-0 min-w-5" :style="{ color: 'var(--text-muted)' }">#{{ i + 1 }}</span>
+            <Select v-model:value="d.mode" style="width:110px" size="small"
+              :options="[{value:'percent',label:'百分比 %'},{value:'fixed',label:'固定金额 ¥'}]" />
+            <template v-if="d.mode === 'percent'">
+              <InputNumber v-model:value="d.value" :min="0" :max="100" :step="1" style="width:80px" size="small" />
+              <span class="text-xs" :style="{ color: 'var(--text-muted)' }">%</span>
+            </template>
+            <template v-else>
+              <InputNumber v-model:value="d.value" :min="0" :step="0.01" style="width:120px" size="small" />
+              <span class="text-xs" :style="{ color: 'var(--text-muted)' }">元</span>
+            </template>
+            <span class="text-xs font-mono flex-shrink-0" :style="{ color: 'var(--danger)', fontWeight: 600, minWidth: '60px', textAlign: 'right' }">
+              −¥{{ (d.mode === 'percent' ? orderTotal * d.value / 100 : d.value).toFixed(2) }}
+            </span>
+            <Input v-model:value="d.note" size="small" placeholder="备注" style="width:110px" />
+            <Button type="text" size="small" danger @click="removeDiscount(i)"><DeleteOutlined /></Button>
           </div>
         </div>
 
         <!-- Summary -->
         <div class="flex justify-end gap-6 text-sm p-3 rounded-lg" :style="{ background: 'var(--input-bg)' }">
           <span :style="{ color: 'var(--text-muted)' }">商品总额: <b :style="{ color: 'var(--text-primary)' }">¥{{ orderTotal.toFixed(2) }}</b></span>
-          <span v-if="orderForm.discount_amount > 0" :style="{ color: 'var(--text-muted)' }">折扣: <b :style="{ color: 'var(--danger)' }">−¥{{ Number(orderForm.discount_amount).toFixed(2) }}</b></span>
+          <span v-if="totalDiscount > 0" :style="{ color: 'var(--text-muted)' }">优惠合计: <b :style="{ color: 'var(--danger)' }">−¥{{ totalDiscount.toFixed(2) }}</b></span>
           <span :style="{ color: 'var(--text-muted)' }">实付: <b :style="{ color: 'var(--accent)', fontSize: '16px' }">¥{{ orderFinal.toFixed(2) }}</b></span>
         </div>
 
-        <!-- Vehicle & Notes -->
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">配送车辆</label>
-            <Input v-model:value="orderForm.vehicle_info" placeholder="车牌号 / 车型" />
-          </div>
-          <div>
-            <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">司机信息</label>
-            <Input v-model:value="orderForm.driver_info" placeholder="司机姓名 / 电话" />
-          </div>
-        </div>
+        <!-- Notes -->
         <div>
           <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">备注</label>
           <Input.TextArea v-model:value="orderForm.notes" :rows="2" placeholder="订单备注..." />
@@ -363,7 +491,7 @@ const productCols = [
           </div>
           <div class="flex items-center gap-2">
             <span :style="{ color: 'var(--text-muted)', fontSize: '12px', minWidth: '48px' }">客户</span>
-            <span :style="{ color: 'var(--text-primary)', fontWeight: 500 }">{{ userMap.get(selectedOrder.customer_id)?.full_name || '—' }}</span>
+            <span :style="{ color: 'var(--text-primary)', fontWeight: 500 }">{{ customerMap.get(selectedOrder.customer_id)?.name || '—' }}</span>
           </div>
           <div class="flex items-center gap-2">
             <span :style="{ color: 'var(--text-muted)', fontSize: '12px', minWidth: '48px' }">原价</span>
@@ -428,8 +556,8 @@ const productCols = [
     </Modal>
 
     <!-- ═══ Status change modal ═══ -->
-    <Modal v-model:open="statusModal" title="变更订单状态" @ok="handleStatusChange" okText="确认" cancelText="取消" :width="460">
-      <div class="space-y-3 py-2">
+    <Modal v-model:open="statusModal" title="变更订单状态" @ok="handleStatusChange" okText="确认" cancelText="取消" :width="420">
+      <div class="space-y-4 py-2">
         <div>
           <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">当前状态</label>
           <Tag :color="statusColors[selectedOrder?.status]">{{ statusLabels[selectedOrder?.status] || selectedOrder?.status }}</Tag>
@@ -439,20 +567,24 @@ const productCols = [
           <Select v-model:value="statusForm.status" class="w-full" placeholder="选择新状态"
             :options="(nextStatus[selectedOrder?.status] || []).map((s: string) => ({ value: s, label: statusLabels[s] }))" />
         </div>
-        <div v-if="statusForm.status === 'shipped' || selectedOrder?.status === 'shipped'" class="grid grid-cols-2 gap-3">
-          <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">车辆信息</label><Input v-model:value="statusForm.vehicle_info" placeholder="车牌号 / 车型" /></div>
-          <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">司机信息</label><Input v-model:value="statusForm.driver_info" placeholder="司机姓名 / 电话" /></div>
-        </div>
       </div>
     </Modal>
 
     <!-- ═══ Product edit modal ═══ -->
     <Modal :title="editing ? '编辑商品' : '新增商品'" v-model:open="modalOpen" @ok="handleSave" okText="保存" cancelText="取消" :width="480">
       <div class="grid grid-cols-2 gap-3 py-2">
-        <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">SKU</label><Input v-model:value="form.sku" placeholder="PRO-001" /></div>
+        <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">SKU</label><Input v-model:value="form.sku" placeholder="自动生成" disabled /></div>
         <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">价格</label><InputNumber v-model:value="form.original_price" class="w-full" :min="0" :step="0.01" /></div>
         <div class="col-span-2"><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">商品名称</label><Input v-model:value="form.name" placeholder="商品名称" /></div>
-        <div class="col-span-2"><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">分类</label><Select v-model:value="form.category" class="w-full" allowClear placeholder="选择分类" :options="categories.map(c=>({value:c,label:c}))" /></div>
+        <div class="col-span-2"><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">分类</label><Select v-model:value="form.category" class="w-full" allowClear placeholder="选择分类" :options="categoryOptions" /></div>
+      </div>
+    </Modal>
+
+    <!-- ═══ Category modal ═══ -->
+    <Modal :title="catEditing ? '编辑分类' : '添加分类'" v-model:open="catModalOpen" @ok="handleCatSave" :confirmLoading="catSaving" okText="保存" cancelText="取消" :width="460">
+      <div class="grid gap-3 py-2">
+        <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">名称 <span :style="{ color: 'var(--danger)' }">*</span></label><Input v-model:value="catForm.name" placeholder="分类名称" /></div>
+        <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">描述</label><Input.TextArea v-model:value="catForm.description" :rows="2" placeholder="分类描述" /></div>
       </div>
     </Modal>
   </div>

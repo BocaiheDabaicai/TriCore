@@ -66,11 +66,12 @@ pub async fn create_employee(
     body: web::Json<CreateEmployeeRequest>,
 ) -> Result<HttpResponse, AppError> {
     let hash = bcrypt::hash(&body.password, 10)?;
+    let role = body.role.as_deref().unwrap_or("user");
     let emp = sqlx::query_as::<_, Employee>(
-        "INSERT INTO employees (employee_no, name, department, position, email, phone, password_hash)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *"
+        "INSERT INTO employees (employee_no, name, department, position, email, phone, password_hash, role)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *"
     ).bind(&body.employee_no).bind(&body.name).bind(&body.department)
-     .bind(&body.position).bind(&body.email).bind(&body.phone).bind(&hash)
+     .bind(&body.position).bind(&body.email).bind(&body.phone).bind(&hash).bind(role)
     .fetch_one(pool.get_ref()).await?;
     Ok(HttpResponse::Created().json(ApiResponse::success(emp)))
 }
@@ -90,11 +91,17 @@ pub async fn update_employee(
     let email = body.email.as_deref().unwrap_or(&existing.email);
     let phone = body.phone.as_deref().or(existing.phone.as_deref());
     let status = body.status.as_deref().unwrap_or(&existing.status);
+    let role = body.role.as_deref().unwrap_or(&existing.role);
+
+    let pwd_hash: String = match &body.password {
+        Some(pwd) if !pwd.is_empty() => bcrypt::hash(pwd, 10)?,
+        _ => existing.password_hash.clone(),
+    };
 
     let emp = sqlx::query_as::<_, Employee>(
-        "UPDATE employees SET name=$1, department=$2, position=$3, email=$4, phone=$5, status=$6
-         WHERE id=$7 RETURNING *"
-    ).bind(name).bind(dept).bind(pos).bind(email).bind(phone).bind(status).bind(*path)
+        "UPDATE employees SET name=$1, department=$2, position=$3, email=$4, phone=$5, status=$6, role=$7, password_hash=$8
+         WHERE id=$9 RETURNING *"
+    ).bind(name).bind(dept).bind(pos).bind(email).bind(phone).bind(status).bind(role).bind(pwd_hash).bind(*path)
     .fetch_one(pool.get_ref()).await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(emp)))
 }

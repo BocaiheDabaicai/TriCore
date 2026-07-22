@@ -238,8 +238,6 @@ pub struct CreateOrderItem {
 #[derive(Debug, Deserialize)]
 pub struct UpdateOrderStatusRequest {
     pub status: String,
-    pub vehicle_info: Option<String>,
-    pub driver_info: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,4 +314,31 @@ pub struct OrderListQuery {
     pub customer_id: Option<Uuid>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
+}
+
+// ═══════════════════════════════════════════════════════════
+// Product Category
+// ═══════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct ProductCategory {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateCategoryRequest {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateCategoryRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub is_active: Option<bool>,
 }

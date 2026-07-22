@@ -1,3 +1,4 @@
+mod auth;
 mod inventory;
 mod master_data;
 mod oa;
@@ -8,6 +9,7 @@ use actix_web::web;
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api")
+            .configure(auth::configure)
             .configure(sales::configure)
             .configure(oa::configure)
             .configure(inventory::configure)

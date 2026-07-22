@@ -6,14 +6,36 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token')
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  (error) => Promise.reject(error),
+)
+
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token')
+      window.location.href = '/login'
+      return Promise.reject(error)
+    }
     const msg = error.response?.data?.message || error.message || '请求失败'
     console.error('API Error:', msg)
     return Promise.reject(error)
   },
 )
+
+export const authAPI = {
+  login: (employee_no: string, password: string) =>
+    api.post('/auth/login', { employee_no, password }),
+  me: () => api.get('/auth/me'),
+}
 
 export const salesAPI = {
   login: (data: { username: string; password: string }) =>
@@ -39,6 +61,12 @@ export const salesAPI = {
   createReturn: (data: Record<string, unknown>) => api.post('/sales/returns', data),
   updateReturnStatus: (id: string, status: string) => api.patch(`/sales/returns/${id}/status`, { status }),
   getDashboard: () => api.get('/sales/dashboard'),
+  // Categories
+  listCategories: () => api.get('/sales/categories'),
+  getCategory: (id: string) => api.get(`/sales/categories/${id}`),
+  createCategory: (data: Record<string, unknown>) => api.post('/sales/categories', data),
+  updateCategory: (id: string, data: Record<string, unknown>) => api.put(`/sales/categories/${id}`, data),
+  deleteCategory: (id: string) => api.delete(`/sales/categories/${id}`),
 }
 
 export const oaAPI = {
@@ -66,6 +94,7 @@ export const inventoryAPI = {
   getWarehouse: (id: string) => api.get(`/inventory/warehouses/${id}`),
   createWarehouse: (data: Record<string, unknown>) => api.post('/inventory/warehouses', data),
   updateWarehouse: (id: string, data: Record<string, unknown>) => api.put(`/inventory/warehouses/${id}`, data),
+  deleteWarehouse: (id: string) => api.delete(`/inventory/warehouses/${id}`),
   listStockIn: (params?: Record<string, unknown>) => api.get('/inventory/stock-in', { params }),
   getStockIn: (id: string) => api.get(`/inventory/stock-in/${id}`),
   createStockIn: (data: Record<string, unknown>) => api.post('/inventory/stock-in', data),

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, h, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { Popover, Tag } from 'ant-design-vue'
+import { Popover, Tag, Button } from 'ant-design-vue'
 import {
   DashboardOutlined,
   ShoppingCartOutlined,
@@ -16,25 +16,24 @@ import {
   TeamOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons-vue'
-import { oaAPI } from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
 const route = useRoute()
 const collapsed = ref(false)
 const isDark = ref(true)
-const currentUser = ref<any>(null)
+const auth = useAuthStore()
 const userHovered = ref(false)
 
 onMounted(async () => {
   const saved = localStorage.getItem('theme')
   isDark.value = saved ? saved === 'dark' : true
   applyTheme()
-  try {
-    const res: any = await oaAPI.listEmployees({ per_page: 1 })
-    const list = res?.data?.data || res?.data || []
-    if (list.length > 0) currentUser.value = list[0]
-  } catch { /* no user */ }
+  if (auth.token && !auth.user) {
+    await auth.fetchCurrentUser()
+  }
 })
 
 function applyTheme() {
@@ -45,6 +44,11 @@ function applyTheme() {
 function toggleTheme() {
   isDark.value = !isDark.value
   applyTheme()
+}
+
+function handleLogout() {
+  auth.logout()
+  router.push('/login')
 }
 
 const menuItems = [
@@ -59,6 +63,8 @@ const menuItems = [
       { key: '/master-data/departments', label: '部门管理' },
       { key: '/master-data/positions', label: '职位管理' },
       { key: '/master-data/vehicles', label: '车辆管理' },
+      { key: '/master-data/users', label: '用户管理' },
+      { key: '/master-data/warehouses', label: '仓库管理' },
     ],
   },
 ]
@@ -150,7 +156,7 @@ function onMenuClick({ key }: { key: string }) { router.push(key) }
         <div class="flex items-center gap-3">
           <!-- User Profile -->
           <Popover
-            v-if="currentUser"
+            v-if="auth.currentUser"
             trigger="hover"
             placement="bottomRight"
             :overlayStyle="{ maxWidth: '300px' }"
@@ -160,39 +166,44 @@ function onMenuClick({ key }: { key: string }) { router.push(key) }
                 <div class="flex items-center gap-3 mb-3 pb-3 border-b" :style="{ borderColor: 'var(--border-subtle)' }">
                   <div class="w-12 h-12 rounded-full flex items-center justify-center text-lg font-bold text-white flex-shrink-0"
                     style="background: linear-gradient(135deg, #6c5ce7, #a78bfa)">
-                    {{ currentUser.name?.charAt(0) }}
+                    {{ auth.currentUser.name?.charAt(0) }}
                   </div>
                   <div>
-                    <p class="font-semibold text-sm" :style="{ color: 'var(--text-primary)' }">{{ currentUser.name }}</p>
-                    <p class="text-xs" :style="{ color: 'var(--text-muted)' }">{{ currentUser.position }}</p>
+                    <p class="font-semibold text-sm" :style="{ color: 'var(--text-primary)' }">{{ auth.currentUser.name }}</p>
+                    <p class="text-xs" :style="{ color: 'var(--text-muted)' }">{{ auth.currentUser.position }}</p>
                   </div>
                 </div>
                 <div class="space-y-2 text-xs">
                   <div class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
                     <IdcardOutlined :style="{ color: 'var(--accent)' }" />
                     <span :style="{ color: 'var(--text-muted)' }">工号</span>
-                    <span :style="{ color: 'var(--text-primary)', fontFamily: 'ui-monospace, monospace' }">{{ currentUser.employee_no }}</span>
+                    <span :style="{ color: 'var(--text-primary)', fontFamily: 'ui-monospace, monospace' }">{{ auth.currentUser.employee_no }}</span>
                   </div>
                   <div class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
                     <TeamOutlined :style="{ color: 'var(--accent)' }" />
                     <span :style="{ color: 'var(--text-muted)' }">部门</span>
-                    <Tag>{{ currentUser.department }}</Tag>
+                    <Tag>{{ auth.currentUser.department }}</Tag>
                   </div>
                   <div class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
                     <MailOutlined :style="{ color: 'var(--accent)' }" />
                     <span :style="{ color: 'var(--text-muted)' }">邮箱</span>
-                    <span :style="{ color: 'var(--text-primary)' }">{{ currentUser.email }}</span>
+                    <span :style="{ color: 'var(--text-primary)' }">{{ auth.currentUser.email }}</span>
                   </div>
-                  <div v-if="currentUser.phone" class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
+                  <div v-if="auth.currentUser.phone" class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
                     <PhoneOutlined :style="{ color: 'var(--accent)' }" />
                     <span :style="{ color: 'var(--text-muted)' }">电话</span>
-                    <span :style="{ color: 'var(--text-primary)' }">{{ currentUser.phone }}</span>
+                    <span :style="{ color: 'var(--text-primary)' }">{{ auth.currentUser.phone }}</span>
                   </div>
                   <div class="flex items-center gap-2" :style="{ color: 'var(--text-secondary)' }">
                     <SafetyCertificateOutlined :style="{ color: 'var(--success)' }" />
                     <span :style="{ color: 'var(--text-muted)' }">状态</span>
                     <Tag color="green">在职</Tag>
                   </div>
+                </div>
+                <div class="mt-3 pt-2 border-t" :style="{ borderColor: 'var(--border-subtle)' }">
+                  <Button type="link" size="small" danger block @click="handleLogout">
+                    <LogoutOutlined /> 退出登录
+                  </Button>
                 </div>
               </div>
             </template>
@@ -207,11 +218,11 @@ function onMenuClick({ key }: { key: string }) { router.push(key) }
             >
               <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
                 style="background: linear-gradient(135deg, #6c5ce7, #a78bfa)">
-                {{ currentUser.name?.charAt(0) }}
+                {{ auth.currentUser.name?.charAt(0) }}
               </div>
               <div class="text-left leading-tight hidden sm:block">
-                <p class="text-xs font-semibold" :style="{ color: 'var(--text-primary)' }">{{ currentUser.name }}</p>
-                <p class="text-xs" :style="{ color: 'var(--text-muted)' }">{{ currentUser.department }}</p>
+                <p class="text-xs font-semibold" :style="{ color: 'var(--text-primary)' }">{{ auth.currentUser.name }}</p>
+                <p class="text-xs" :style="{ color: 'var(--text-muted)' }">{{ auth.currentUser.department }}</p>
               </div>
             </div>
           </Popover>

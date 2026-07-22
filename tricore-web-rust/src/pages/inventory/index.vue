@@ -15,7 +15,7 @@ const issueModal = ref(false)
 const adjustModal = ref(false)
 const adjustingProduct = ref<any>(null)
 const issueForm = ref({ description: '', severity: 'medium', related_type: 'product', related_id: '', reported_by: '' })
-const adjustForm = ref({ type: 'in' as 'in' | 'out', quantity: 1, notes: '' })
+const adjustForm = ref({ type: 'in' as 'in' | 'out', quantity: 1, notes: '', warehouse_id: '' })
 const adjustSubmitting = ref(false)
 const activeTab = ref('stock')
 
@@ -48,7 +48,7 @@ onMounted(load)
 
 const openAdjust = (product: any) => {
   adjustingProduct.value = product
-  adjustForm.value = { type: 'in', quantity: 1, notes: '' }
+  adjustForm.value = { type: 'in', quantity: 1, notes: '', warehouse_id: defaultWarehouseId.value }
   adjustModal.value = true
 }
 
@@ -57,7 +57,7 @@ const handleAdjust = async () => {
     message.warning('请输入有效的调整数量')
     return
   }
-  if (!defaultWarehouseId.value) { message.warning('没有可用的仓库'); return }
+  if (!adjustForm.value.warehouse_id) { message.warning('请选择仓库'); return }
   if (!defaultOperatorId.value) { message.warning('没有可用的操作员'); return }
 
   adjustSubmitting.value = true
@@ -65,7 +65,7 @@ const handleAdjust = async () => {
     if (adjustForm.value.type === 'in') {
       // Stock-in flow: create → verify → complete
       const createRes: any = await inventoryAPI.createStockIn({
-        warehouse_id: defaultWarehouseId.value,
+        warehouse_id: adjustForm.value.warehouse_id,
         operator_id: defaultOperatorId.value,
         notes: adjustForm.value.notes || `手动调整: ${adjustingProduct.value.name} +${adjustForm.value.quantity}`,
         items: [{
@@ -86,7 +86,7 @@ const handleAdjust = async () => {
     } else {
       // Stock-out flow: create (auto-deducts inventory)
       await inventoryAPI.createStockOut({
-        warehouse_id: defaultWarehouseId.value,
+        warehouse_id: adjustForm.value.warehouse_id,
         operator_id: defaultOperatorId.value,
         notes: adjustForm.value.notes || `手动调整: ${adjustingProduct.value.name} -${adjustForm.value.quantity}`,
         items: [{
@@ -106,30 +106,48 @@ const handleAdjust = async () => {
 }
 
 const handleCreateIssue = async () => {
-  if (!issueForm.value.description || !issueForm.value.related_id) { message.warning('请填写描述'); return }
+  if (!issueForm.value.description || !issueForm.value.related_id) { message.warning('请填写描述和关联商品'); return }
+  if (!issueForm.value.reported_by) { message.warning('没有可用的报告人'); return }
   try { await inventoryAPI.createIssue(issueForm.value); message.success('已登记'); issueModal.value = false; load() } catch { message.error('操作失败') }
 }
 
-const handleResolve = async (id: string) => {
-  const res = prompt('解决方案：'); if (!res) return
-  try { await inventoryAPI.resolveIssue(id, { resolution: res }); message.success('已解决'); load() } catch { message.error('操作失败') }
+const resolveModal = ref(false)
+const resolveId = ref('')
+const resolveText = ref('')
+const resolveSubmitting = ref(false)
+
+const openResolve = (id: string) => {
+  resolveId.value = id
+  resolveText.value = ''
+  resolveModal.value = true
+}
+
+const handleResolve = async () => {
+  if (!resolveText.value.trim()) { message.warning('请输入解决方案'); return }
+  resolveSubmitting.value = true
+  try {
+    await inventoryAPI.resolveIssue(resolveId.value, { resolution: resolveText.value.trim() })
+    message.success('已解决')
+    resolveModal.value = false
+    load()
+  } catch { message.error('操作失败') } finally { resolveSubmitting.value = false }
 }
 
 const productCols = [
-  { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 100,
+  { title: 'SKU', dataIndex: 'sku', key: 'sku', width: 130,
     customRender: ({ text }: any) => h('span', { style: { color: 'var(--accent)', fontFamily: 'ui-monospace, monospace', fontSize: '12px', fontWeight: 500 } }, text) },
   { title: '商品名称', dataIndex: 'name', key: 'name',
     customRender: ({ text }: any) => h('span', { style: { fontWeight: 500 } }, text) },
-  { title: '库存', dataIndex: 'quantity', key: 'qty', width: 100,
+  { title: '库存', dataIndex: 'quantity', key: 'qty', width: 120,
     customRender: ({ text }: any) => {
       const c = text < 50 ? 'var(--danger)' : text < 200 ? 'var(--warning)' : 'var(--success)'
       return h('span', { style: { color: c, fontWeight: 600, fontFamily: 'ui-monospace, monospace' } }, `${text} ${text < 50 ? '⚠' : ''}`)
     }},
-  { title: '单价', dataIndex: 'original_price', key: 'price', width: 100,
+  { title: '单价', dataIndex: 'original_price', key: 'price', width: 120,
     customRender: ({ text }: any) => h('span', { style: { color: '#f59e0b', fontFamily: 'ui-monospace, monospace', fontSize: '13px' } }, `¥${Number(text).toFixed(2)}`) },
-  { title: '分类', dataIndex: 'category', key: 'cat', width: 90,
+  { title: '分类', dataIndex: 'category', key: 'cat', width: 110,
     customRender: ({ text }: any) => text ? h(Tag, {}, () => text) : h('span', { style: { color: 'var(--text-muted)' } }, '—') },
-  { title: '操作', key: 'action', width: 100,
+  { title: '操作', key: 'action', width: 120,
     customRender: ({ record }: any) =>
       h(Button, { type: 'link', size: 'small', onClick: () => openAdjust(record) }, () => [h(EditOutlined), ' 调整']) },
 ]
@@ -137,35 +155,35 @@ const productCols = [
 const issueCols = [
   { title: '问题描述', dataIndex: 'description', key: 'desc', ellipsis: true,
     customRender: ({ text }: any) => h('span', { style: { color: 'var(--text-primary)' } }, text) },
-  { title: '类型', dataIndex: 'related_type', key: 'type', width: 80,
+  { title: '类型', dataIndex: 'related_type', key: 'type', width: 100,
     customRender: ({ text }: any) => h(Tag, {}, () => text) },
-  { title: '严重程度', dataIndex: 'severity', key: 'sev', width: 90,
+  { title: '严重程度', dataIndex: 'severity', key: 'sev', width: 110,
     customRender: ({ text }: any) => h(Tag, { color: severityColor[text] || 'default' }, () => severityLabel[text] || text) },
-  { title: '状态', dataIndex: 'status', key: 'status', width: 80,
+  { title: '状态', dataIndex: 'status', key: 'status', width: 100,
     customRender: ({ text }: any) => { const c = text === 'open' ? 'red' : text === 'in_progress' ? 'blue' : 'green'; return h(Tag, { color: c }, () => text) }},
-  { title: '操作', key: 'action', width: 80,
-    customRender: ({ record }: any) => record.status !== 'resolved' && record.status !== 'closed' ? h(Button, { type: 'link', size: 'small', onClick: () => handleResolve(record.id) }, () => [h(CheckCircleOutlined), ' 解决']) : h('span', { style: { color: 'var(--success)', fontSize: '12px' } }, '已解决') },
+  { title: '操作', key: 'action', width: 100,
+    customRender: ({ record }: any) => record.status !== 'resolved' && record.status !== 'closed' ? h(Button, { type: 'link', size: 'small', onClick: () => openResolve(record.id) }, () => [h(CheckCircleOutlined), ' 解决']) : h('span', { style: { color: 'var(--success)', fontSize: '12px' } }, '已解决') },
 ]
 
 const siCols = [
-  { title: '入库单号', dataIndex: 'stock_in_no', key: 'no', width: 140,
+  { title: '入库单号', dataIndex: 'stock_in_no', key: 'no', width: 190,
     customRender: ({ text }: any) => h('span', { style: { color: 'var(--accent)', fontFamily: 'ui-monospace, monospace', fontSize: '12px' } }, text) },
-  { title: '状态', dataIndex: 'status', key: 'status', width: 90,
+  { title: '状态', dataIndex: 'status', key: 'status', width: 110,
     customRender: ({ text }: any) => h(Tag, { color: text === 'completed' ? 'green' : text === 'verified' ? 'blue' : 'default' }, () => text) },
   { title: '备注', dataIndex: 'notes', key: 'notes', ellipsis: true,
     customRender: ({ text }: any) => text || h('span', { style: { color: 'var(--text-muted)' } }, '—') },
-  { title: '时间', dataIndex: 'created_at', key: 'time', width: 110,
+  { title: '时间', dataIndex: 'created_at', key: 'time', width: 130,
     customRender: ({ text }: any) => h('span', { style: { fontSize: '12px', color: 'var(--text-muted)' } }, new Date(text).toLocaleDateString('zh-CN')) },
 ]
 
 const soCols = [
-  { title: '出库单号', dataIndex: 'stock_out_no', key: 'no', width: 140,
+  { title: '出库单号', dataIndex: 'stock_out_no', key: 'no', width: 190,
     customRender: ({ text }: any) => h('span', { style: { color: 'var(--accent)', fontFamily: 'ui-monospace, monospace', fontSize: '12px' } }, text) },
-  { title: '车辆信息', dataIndex: 'vehicle_info', key: 'vehicle', width: 140,
+  { title: '车辆信息', dataIndex: 'vehicle_info', key: 'vehicle', width: 170,
     customRender: ({ text }: any) => text || h('span', { style: { color: 'var(--text-muted)' } }, '—') },
-  { title: '状态', dataIndex: 'status', key: 'status', width: 90,
+  { title: '状态', dataIndex: 'status', key: 'status', width: 110,
     customRender: ({ text }: any) => h(Tag, { color: text === 'delivered' ? 'green' : text === 'shipped' ? 'blue' : 'default' }, () => text) },
-  { title: '时间', dataIndex: 'created_at', key: 'time', width: 110,
+  { title: '时间', dataIndex: 'created_at', key: 'time', width: 130,
     customRender: ({ text }: any) => h('span', { style: { fontSize: '12px', color: 'var(--text-muted)' } }, new Date(text).toLocaleDateString('zh-CN')) },
 ]
 </script>
@@ -180,23 +198,23 @@ const soCols = [
       <div class="glass-card p-6">
         <Tabs v-model:activeKey="activeTab">
           <a-tab-pane key="stock" :tab="`库存 (${products.length})`">
-            <Table :columns="productCols" :dataSource="products" rowKey="id" size="small" :pagination="{ pageSize: 10, showSizeChanger: false }">
+            <Table :columns="productCols" :dataSource="products" rowKey="id" size="middle" :pagination="{ pageSize: 10, showSizeChanger: false }">
               <template #emptyText>暂无数据</template>
             </Table>
           </a-tab-pane>
           <a-tab-pane key="stock-in" :tab="`入库 (${stockIn.length})`">
-            <Table :columns="siCols" :dataSource="stockIn" rowKey="id" size="small" :pagination="{ pageSize: 10, showSizeChanger: false }">
+            <Table :columns="siCols" :dataSource="stockIn" rowKey="id" size="middle" :pagination="{ pageSize: 10, showSizeChanger: false }">
               <template #emptyText>暂无数据</template>
             </Table>
           </a-tab-pane>
           <a-tab-pane key="stock-out" :tab="`出库 (${stockOut.length})`">
-            <Table :columns="soCols" :dataSource="stockOut" rowKey="id" size="small" :pagination="{ pageSize: 10, showSizeChanger: false }">
+            <Table :columns="soCols" :dataSource="stockOut" rowKey="id" size="middle" :pagination="{ pageSize: 10, showSizeChanger: false }">
               <template #emptyText>暂无数据</template>
             </Table>
           </a-tab-pane>
           <a-tab-pane key="issues" :tab="`问题 (${issues.length})`">
-            <div class="mb-3"><Button type="primary" @click="() => { issueForm.related_id = products[0]?.id || ''; issueModal = true }"><PlusOutlined /> 登记问题</Button></div>
-            <Table :columns="issueCols" :dataSource="issues" rowKey="id" size="small" :pagination="{ pageSize: 10, showSizeChanger: false }">
+            <div class="mb-3"><Button type="primary" @click="() => { issueForm.related_id = products[0]?.id || ''; issueForm.reported_by = defaultOperatorId; issueModal = true }"><PlusOutlined /> 登记问题</Button></div>
+            <Table :columns="issueCols" :dataSource="issues" rowKey="id" size="middle" :pagination="{ pageSize: 10, showSizeChanger: false }">
               <template #emptyText>暂无数据</template>
             </Table>
           </a-tab-pane>
@@ -221,6 +239,12 @@ const soCols = [
               }">{{ adjustingProduct.quantity }}</span>
             </p>
           </div>
+        </div>
+
+        <div>
+          <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">仓库 <span :style="{ color: 'var(--danger)' }">*</span></label>
+          <Select v-model:value="adjustForm.warehouse_id" class="w-full" placeholder="选择仓库"
+            :options="warehouses.map((w: any) => ({ value: w.id, label: w.name + (w.location ? ` (${w.location})` : '') }))" />
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -260,6 +284,14 @@ const soCols = [
         </div>
         <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">关联商品</label><Select v-model:value="issueForm.related_id" class="w-full" showSearch :options="products.map((p:any)=>({value:p.id,label:`${p.name} (${p.sku})`}))" /></div>
         <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">问题描述</label><Input.TextArea v-model:value="issueForm.description" :rows="3" placeholder="描述问题..." /></div>
+      </div>
+    </Modal>
+
+    <!-- 解决问题 Modal -->
+    <Modal v-model:open="resolveModal" title="解决问题" @ok="handleResolve" :confirmLoading="resolveSubmitting" okText="确认解决" cancelText="取消" :width="480">
+      <div class="py-2">
+        <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">解决方案</label>
+        <Input.TextArea v-model:value="resolveText" :rows="4" placeholder="请描述解决方案..." />
       </div>
     </Modal>
   </div>

@@ -9,6 +9,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/warehouses/{id}", web::get().to(inventory::get_warehouse))
             .route("/warehouses", web::post().to(inventory::create_warehouse))
             .route("/warehouses/{id}", web::put().to(inventory::update_warehouse))
+            .route("/warehouses/{id}", web::delete().to(inventory::delete_warehouse))
             // Stock In
             .route("/stock-in", web::get().to(inventory::list_stock_in))
             .route("/stock-in/{id}", web::get().to(inventory::get_stock_in))

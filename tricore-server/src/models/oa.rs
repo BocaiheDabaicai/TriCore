@@ -19,6 +19,7 @@ pub struct Employee {
     #[serde(skip_serializing)]
     pub password_hash: String,
     pub status: String,
+    pub role: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -84,6 +85,7 @@ pub struct CreateEmployeeRequest {
     pub email: String,
     pub phone: Option<String>,
     pub password: String,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,7 +95,9 @@ pub struct UpdateEmployeeRequest {
     pub position: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,
+    pub password: Option<String>,
     pub status: Option<String>,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

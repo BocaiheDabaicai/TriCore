@@ -2,10 +2,17 @@ import { createRouter, createWebHistory } from 'vue-router'
 import MainLayout from '@/layouts/MainLayout.vue'
 
 const MasterDataPage = () => import('@/pages/master-data/index.vue')
+const LoginPage = () => import('@/pages/login/index.vue')
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/login',
+      name: 'Login',
+      component: LoginPage,
+      meta: { title: '登录', public: true },
+    },
     {
       path: '/',
       component: MainLayout,
@@ -59,9 +66,34 @@ const router = createRouter({
           component: MasterDataPage,
           meta: { title: '车辆管理' },
         },
+        {
+          path: 'master-data/users',
+          name: 'MdUsers',
+          component: MasterDataPage,
+          meta: { title: '用户管理' },
+        },
+        {
+          path: 'master-data/warehouses',
+          name: 'MdWarehouses',
+          component: MasterDataPage,
+          meta: { title: '仓库管理' },
+        },
       ],
     },
   ],
+})
+
+router.beforeEach((to, _from, next) => {
+  if (to.meta.public) {
+    next()
+    return
+  }
+  const token = localStorage.getItem('token')
+  if (!token) {
+    next('/login')
+    return
+  }
+  next()
 })
 
 export default router

@@ -380,17 +380,25 @@ pub async fn update_order_status(
         .bind(*path).fetch_optional(pool.get_ref()).await?
         .ok_or_else(|| AppError::NotFound("订单不存在".into()))?;
 
-    let vehicle = body.vehicle_info.as_deref().or(existing.vehicle_info.as_deref());
-    let driver = body.driver_info.as_deref().or(existing.driver_info.as_deref());
-
     let mut tx = pool.begin().await?;
 
     let order = sqlx::query_as::<_, Order>(
-        "UPDATE orders SET status = $1, vehicle_info = $2, driver_info = $3 WHERE id = $4 RETURNING *"
-    ).bind(&body.status).bind(vehicle).bind(driver).bind(*path)
+        "UPDATE orders SET status = $1 WHERE id = $2 RETURNING *"
+    ).bind(&body.status).bind(*path)
     .fetch_one(&mut *tx).await?;
 
-    // When shipped: auto-create stock-out record → deduct inventory
+    // Restore inventory when cancelled
+    if body.status == "cancelled" {
+        let items = sqlx::query_as::<_, OrderItem>(
+            "SELECT * FROM order_items WHERE order_id = $1"
+        ).bind(order.id).fetch_all(&mut *tx).await?;
+        for item in &items {
+            sqlx::query("UPDATE products SET quantity = quantity + $1 WHERE id = $2")
+                .bind(item.quantity).bind(item.product_id).execute(&mut *tx).await?;
+        }
+    }
+
+    // When shipped: auto-create stock-out record
     if body.status == "shipped" {
         let items = sqlx::query_as::<_, OrderItem>(
             "SELECT * FROM order_items WHERE order_id = $1"
@@ -417,7 +425,6 @@ pub async fn update_order_status(
                 "INSERT INTO stock_out_items (stock_out_id, product_id, quantity, unit_price) VALUES ($1,$2,$3,$4)"
             ).bind(stock_out.id).bind(item.product_id).bind(item.quantity).bind(up_d)
             .execute(&mut *tx).await?;
-            // Inventory already deducted at order creation; stock-out is for tracking only.
         }
     }
 
@@ -563,6 +570,66 @@ pub async fn update_return_status(
     ).bind(&body.status).bind(*path).fetch_optional(pool.get_ref()).await?
     .ok_or_else(|| AppError::NotFound("退单不存在".into()))?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(ret)))
+}
+
+// ═══════════════════════════════════════════════════════════
+// CATEGORIES
+// ═══════════════════════════════════════════════════════════
+
+pub async fn list_categories(
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let cats = sqlx::query_as::<_, ProductCategory>(
+        "SELECT * FROM categories WHERE is_active = true ORDER BY name"
+    ).fetch_all(pool.get_ref()).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(cats)))
+}
+
+pub async fn get_category(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let cat = sqlx::query_as::<_, ProductCategory>("SELECT * FROM categories WHERE id = $1")
+        .bind(*path).fetch_optional(pool.get_ref()).await?
+        .ok_or_else(|| AppError::NotFound("分类不存在".into()))?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(cat)))
+}
+
+pub async fn create_category(
+    pool: web::Data<PgPool>,
+    body: web::Json<CreateCategoryRequest>,
+) -> Result<HttpResponse, AppError> {
+    let cat = sqlx::query_as::<_, ProductCategory>(
+        "INSERT INTO categories (name, description) VALUES ($1,$2) RETURNING *"
+    ).bind(&body.name).bind(&body.description).fetch_one(pool.get_ref()).await?;
+    Ok(HttpResponse::Created().json(ApiResponse::success(cat)))
+}
+
+pub async fn update_category(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<UpdateCategoryRequest>,
+) -> Result<HttpResponse, AppError> {
+    let ex = sqlx::query_as::<_, ProductCategory>("SELECT * FROM categories WHERE id = $1")
+        .bind(*path).fetch_optional(pool.get_ref()).await?
+        .ok_or_else(|| AppError::NotFound("分类不存在".into()))?;
+    let cat = sqlx::query_as::<_, ProductCategory>(
+        "UPDATE categories SET name=$1,description=$2,is_active=$3 WHERE id=$4 RETURNING *"
+    ).bind(body.name.as_deref().unwrap_or(&ex.name))
+     .bind(body.description.as_deref().or(ex.description.as_deref()))
+     .bind(body.is_active.unwrap_or(ex.is_active)).bind(*path)
+    .fetch_one(pool.get_ref()).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(cat)))
+}
+
+pub async fn delete_category(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let rows = sqlx::query("DELETE FROM categories WHERE id = $1")
+        .bind(*path).execute(pool.get_ref()).await?.rows_affected();
+    if rows == 0 { return Err(AppError::NotFound("分类不存在".into())); }
+    Ok(HttpResponse::Ok().json(ApiResponse::<String>::message("已删除")))
 }
 
 // ═══════════════════════════════════════════════════════════
