@@ -4,7 +4,7 @@ import { Table, Tag, Button, Modal, Input, Select, message, Spin, Tabs, Space } 
 import {
   PlusOutlined, EyeOutlined, CheckCircleOutlined, SendOutlined,
   AuditOutlined, EditOutlined, ReloadOutlined, DeleteOutlined,
-  UpOutlined, DownOutlined, CloseOutlined,
+  UpOutlined, DownOutlined, CloseOutlined, BlockOutlined, CopyOutlined,
 } from '@ant-design/icons-vue'
 import { oaAPI } from '@/services/api'
 
@@ -16,7 +16,7 @@ const detailModal = ref(false)
 const reviewModal = ref(false)
 const editModal = ref(false)
 const selectedWf = ref<any>(null)
-const reviewForm = ref({ action: 'approve', comment: '' })
+const reviewForm = ref({ action: 'approve', comment: '', reject_mode: 'full' })
 const wfForm = ref({ title: '', description: '', steps: [{ reviewer_id: '' }] as { reviewer_id: string }[] })
 const editForm = ref({ title: '', description: '' })
 const activeTab = ref('workflows')
@@ -28,6 +28,14 @@ const empModal = ref(false)
 const editingEmp = ref<any>(null)
 const empForm = ref({ employee_no: '', name: '', department: '', position: '', email: '', phone: '', password: '' })
 const empSaving = ref(false)
+
+// ── Templates ──
+const templates = ref<any[]>([])
+const tmplModal = ref(false)
+const tmplSelectorModal = ref(false)
+const editingTmpl = ref<any>(null)
+const tmplForm = ref({ name: '', description: '', steps: [{ reviewer_id: '' }] as { reviewer_id: string }[] })
+const tmplSaving = ref(false)
 
 const departments = computed(() => {
   const set = new Set(employees.value.map((e: any) => e.department).filter(Boolean))
@@ -107,8 +115,14 @@ const employeeOptions = computed(() =>
 const load = async () => {
   loading.value = true
   try {
-    const [e, w]: any[] = await Promise.all([oaAPI.listEmployees({ per_page: 100 }), oaAPI.listWorkflows({ per_page: 50 })])
-    employees.value = e?.data?.data || e?.data || []; workflows.value = w?.data?.data || w?.data || []
+    const [e, w, t]: any[] = await Promise.all([
+      oaAPI.listEmployees({ per_page: 100 }),
+      oaAPI.listWorkflows({ per_page: 50 }),
+      oaAPI.listTemplates().catch(() => ({ data: [] })),
+    ])
+    employees.value = e?.data?.data || e?.data || []
+    workflows.value = w?.data?.data || w?.data || []
+    templates.value = t?.data || []
   } catch { message.error('加载失败') } finally { loading.value = false }
 }
 onMounted(load)
@@ -201,6 +215,69 @@ const handleReview = async () => {
   try { await oaAPI.reviewStep(selectedWf.value.id, step.id, reviewForm.value); message.success(reviewForm.value.action === 'approve' ? '已通过' : '已退回'); reviewModal.value = false; load() } catch { message.error('操作失败') }
 }
 
+// ── Template helpers ──
+const tmplAddStep = () => tmplForm.value.steps.push({ reviewer_id: '' })
+const tmplRemoveStep = (i: number) => {
+  if (tmplForm.value.steps.length <= 1) { message.warning('至少需要一个审核人'); return }
+  tmplForm.value.steps.splice(i, 1)
+}
+const tmplMoveUp = (i: number) => { if (i === 0) return; const arr = tmplForm.value.steps; [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]] }
+const tmplMoveDown = (i: number) => { const arr = tmplForm.value.steps; if (i >= arr.length - 1) return; [arr[i + 1], arr[i]] = [arr[i], arr[i + 1]] }
+
+const openTmplCreate = () => {
+  editingTmpl.value = null
+  tmplForm.value = { name: '', description: '', steps: [{ reviewer_id: '' }] }
+  tmplModal.value = true
+}
+
+const openTmplEdit = (record: any) => {
+  editingTmpl.value = record
+  const savedSteps: any[] = record.steps || []
+  tmplForm.value = {
+    name: record.name,
+    description: record.description || '',
+    steps: savedSteps.length > 0
+      ? savedSteps.map((s: any) => ({ reviewer_id: s.reviewer_id }))
+      : [{ reviewer_id: '' }],
+  }
+  tmplModal.value = true
+}
+
+const handleTmplSave = async () => {
+  if (!tmplForm.value.name.trim()) { message.warning('请输入模板名称'); return }
+  if (tmplForm.value.steps.some((s) => !s.reviewer_id)) { message.warning('请为每个步骤选择审核人'); return }
+  tmplSaving.value = true
+  try {
+    const steps = tmplForm.value.steps.map((s, i) => ({ step_number: i + 1, reviewer_id: s.reviewer_id }))
+    if (editingTmpl.value) {
+      await oaAPI.updateTemplate(editingTmpl.value.id, { name: tmplForm.value.name, description: tmplForm.value.description || undefined, steps })
+      message.success('模板已更新')
+    } else {
+      await oaAPI.createTemplate({ name: tmplForm.value.name, description: tmplForm.value.description || undefined, steps })
+      message.success('模板已创建')
+    }
+    tmplModal.value = false
+    load()
+  } catch (err: any) { message.error(err?.response?.data?.message || '保存失败') } finally { tmplSaving.value = false }
+}
+
+const handleTmplDelete = (record: any) => {
+  Modal.confirm({
+    title: '确认删除', content: `确定要删除模板「${record.name}」吗？`, okText: '确认删除', okType: 'danger', cancelText: '取消',
+    onOk: async () => { try { await oaAPI.deleteTemplate(record.id); message.success('已删除'); load() } catch { message.error('删除失败') } },
+  })
+}
+
+const applyTemplate = (t: any) => {
+  const steps: any[] = t.steps || []
+  wfForm.value.title = t.name
+  wfForm.value.description = t.description || ''
+  wfForm.value.steps = steps.length > 0
+    ? steps.map((s: any) => ({ reviewer_id: s.reviewer_id }))
+    : [{ reviewer_id: '' }]
+  tmplSelectorModal.value = false
+}
+
 // ── Table columns ──
 const wfCols = [
   { title: '流程标题', dataIndex: 'title', key: 'title',
@@ -247,6 +324,20 @@ const empCols = [
       h(Button, { type: 'link', size: 'small', danger: true, onClick: () => handleEmpDelete(record) }, () => [h(DeleteOutlined)]),
     ])},
 ]
+
+const tmplCols = [
+  { title: '架构名称', dataIndex: 'name', key: 'name',
+    customRender: ({ text }: any) => h('span', { style: { fontWeight: 600, color: 'var(--text-primary)' } }, text) },
+  { title: '描述', dataIndex: 'description', key: 'desc', ellipsis: true,
+    customRender: ({ text }: any) => text || h('span', { style: { color: 'var(--text-muted)' } }, '—') },
+  { title: '步骤数', key: 'stepCount', width: 80,
+    customRender: ({ record }: any) => h('span', { style: { color: 'var(--text-secondary)', fontFamily:'ui-monospace,monospace', fontSize:'13px' } }, String((record.steps || []).length)) },
+  { title: '操作', key: 'action', width: 140,
+    customRender: ({ record }: any) => h(Space, { size: 4 }, () => [
+      h(Button, { type: 'link', size: 'small', onClick: () => openTmplEdit(record) }, () => [h(EditOutlined), ' 编辑']),
+      h(Button, { type: 'link', size: 'small', danger: true, onClick: () => handleTmplDelete(record) }, () => [h(DeleteOutlined)]),
+    ])},
+]
 </script>
 
 <template>
@@ -264,6 +355,12 @@ const empCols = [
               <template #emptyText>暂无数据</template>
             </Table>
           </a-tab-pane>
+          <a-tab-pane key="templates" :tab="`流程架构 (${templates.length})`">
+            <div class="mb-3"><Button type="primary" @click="openTmplCreate"><PlusOutlined /> 新建架构</Button></div>
+            <Table :columns="tmplCols" :dataSource="templates" rowKey="id" size="small" :pagination="{ pageSize: 10, showSizeChanger: false }">
+              <template #emptyText>暂无架构，点击「新建架构」添加常用流程模板</template>
+            </Table>
+          </a-tab-pane>
           <a-tab-pane key="employees" :tab="`员工列表 (${employees.length})`">
             <div class="mb-3"><Button type="primary" @click="openEmpCreate"><PlusOutlined /> 添加员工</Button></div>
             <Table :columns="empCols" :dataSource="employees" rowKey="id" size="small" :pagination="{ pageSize: 10, showSizeChanger: false }">
@@ -278,10 +375,12 @@ const empCols = [
     <!-- ═══ Create workflow modal (multi-step) ═══ -->
     <Modal v-model:open="wfModal" title="新建审批流程" @ok="handleCreate" okText="创建" cancelText="取消" :width="560">
       <div class="space-y-3 py-2">
-        <div class="grid grid-cols-2 gap-3">
-          <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">流程标题</label><Input v-model:value="wfForm.title" placeholder="例如：采购申请" /></div>
-          <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">描述</label><Input v-model:value="wfForm.description" placeholder="流程说明" /></div>
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs font-medium" :style="{ color: 'var(--text-secondary)' }">基本信息</span>
+          <Button type="link" size="small" @click="tmplSelectorModal = true"><CopyOutlined /> 使用流程架构</Button>
         </div>
+        <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">流程标题</label><Input v-model:value="wfForm.title" placeholder="例如：采购申请" /></div>
+        <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">描述</label><Input.TextArea v-model:value="wfForm.description" :rows="3" placeholder="流程说明" /></div>
 
         <!-- Steps -->
         <div>
@@ -379,8 +478,8 @@ const empCols = [
                 </div>
                 <Tag :color="stepStatusColors[step.status] || 'default'">{{ stepStatusLabels[step.status] || step.status }}</Tag>
                 <div v-if="step.comment" class="text-xs italic px-2" :style="{ color: 'var(--text-muted)', maxWidth: '160px' }" :title="step.comment">"{{ step.comment }}"</div>
-                <Button v-if="step.status === 'pending' && selectedWf.status === 'in_progress'" type="primary" size="small"
-                  @click="() => { reviewForm = { action: 'approve', comment: '' }; detailModal = false; reviewModal = true }"><CheckCircleOutlined /> 审核</Button>
+                <Button v-if="step.status === 'pending' && selectedWf.status === 'in_progress' && step.step_number === selectedWf.current_step" type="primary" size="small"
+                  @click="() => { reviewForm = { action: 'approve', comment: '', reject_mode: 'full' }; detailModal = false; reviewModal = true }"><CheckCircleOutlined /> 审核</Button>
               </div>
             </div>
           </div>
@@ -451,7 +550,64 @@ const empCols = [
     <Modal v-model:open="reviewModal" title="审批操作" @ok="handleReview" okText="提交" cancelText="取消" :width="420">
       <div class="space-y-3 py-2">
         <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">操作</label><Select v-model:value="reviewForm.action" class="w-full" :options="[{value:'approve',label:'通过'},{value:'reject',label:'退回'}]" /></div>
+        <div v-if="reviewForm.action === 'reject'">
+          <label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">退回方式</label>
+          <Select v-model:value="reviewForm.reject_mode" class="w-full" :options="[
+            {value:'full', label:'完全退回 — 重置所有步骤，重新从头审批'},
+            {value:'node', label:'本结点退回 — 已通过的步骤保留，仅退回当前步骤'},
+          ]" />
+        </div>
         <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">备注</label><Input.TextArea v-model:value="reviewForm.comment" :rows="3" placeholder="审核意见..." /></div>
+      </div>
+    </Modal>
+
+    <!-- ═══ Template create/edit modal ═══ -->
+    <Modal v-model:open="tmplModal" :title="editingTmpl ? '编辑流程架构' : '新建流程架构'" @ok="handleTmplSave" :confirmLoading="tmplSaving" okText="保存" cancelText="取消" :width="560">
+      <div class="space-y-3 py-2">
+        <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">架构名称</label><Input v-model:value="tmplForm.name" placeholder="例如：标准采购审批" /></div>
+        <div><label class="text-xs mb-1.5 block font-medium" :style="{ color: 'var(--text-secondary)' }">描述</label><Input.TextArea v-model:value="tmplForm.description" :rows="3" placeholder="架构说明" /></div>
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <label class="text-xs font-medium" :style="{ color: 'var(--text-secondary)' }">审核步骤 ({{ tmplForm.steps.length }})</label>
+            <Button type="link" size="small" @click="tmplAddStep"><PlusOutlined /> 添加审核人</Button>
+          </div>
+          <div class="space-y-2">
+            <div v-for="(step, i) in tmplForm.steps" :key="i"
+              class="flex items-center gap-2 p-2 rounded-lg border" :style="{ borderColor: 'var(--border-subtle)', background: 'var(--input-bg)' }">
+              <span class="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 text-white" style="background: var(--accent)">{{ i + 1 }}</span>
+              <Select v-model:value="step.reviewer_id" class="flex-1" placeholder="选择审核人" :options="employeeOptions" showSearch
+                :filterOption="(input: string, option: any) => option.label.toLowerCase().includes(input.toLowerCase())" />
+              <div class="flex items-center gap-0.5 flex-shrink-0">
+                <Button type="text" size="small" :disabled="i === 0" @click="tmplMoveUp(i)"><UpOutlined /></Button>
+                <Button type="text" size="small" :disabled="i >= tmplForm.steps.length - 1" @click="tmplMoveDown(i)"><DownOutlined /></Button>
+                <Button type="text" size="small" danger @click="tmplRemoveStep(i)"><CloseOutlined /></Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
+
+    <!-- ═══ Template selector modal ═══ -->
+    <Modal v-model:open="tmplSelectorModal" title="选择流程架构" :footer="null" :width="600" :zIndex="1010">
+      <div class="space-y-3 py-2">
+        <div v-if="templates.length === 0" class="text-center py-6 text-sm" :style="{ color: 'var(--text-muted)' }">
+          暂无流程架构，请先在「流程架构」Tab 中创建
+        </div>
+        <div v-for="t in templates" :key="t.id"
+          class="p-3 rounded-lg border cursor-pointer transition hover:border-[var(--accent)]"
+          :style="{ borderColor: 'var(--border-subtle)', background: 'var(--input-bg)' }"
+          @click="applyTemplate(t)">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="font-semibold text-sm" :style="{ color: 'var(--text-primary)' }">{{ t.name }}</span>
+            <Button type="primary" size="small"><CopyOutlined /> 使用</Button>
+          </div>
+          <p v-if="t.description" class="text-xs mb-1.5" :style="{ color: 'var(--text-muted)' }">{{ t.description }}</p>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="text-xs" :style="{ color: 'var(--text-muted)' }">审批链：</span>
+            <Tag v-for="(s, si) in (t.steps || [])" :key="si" size="small" color="blue">{{ si + 1 }}. {{ getEmployee(s.reviewer_id)?.name || '—' }}</Tag>
+          </div>
+        </div>
       </div>
     </Modal>
 

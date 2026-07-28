@@ -23,6 +23,7 @@ async fn main() -> std::io::Result<()> {
     info!("TriCore Server starting on {}:{}", cfg.server_host, cfg.server_port);
 
     let jwt_secret = cfg.jwt_secret.clone();
+    let upload_dir = cfg.upload_dir.clone();
 
     HttpServer::new(move || {
         let cors = Cors::permissive();
@@ -33,6 +34,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::from_fn(auth::auth_middleware))
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(jwt_secret.clone()))
+            .app_data(web::Data::new(upload_dir.clone()))
             .configure(routes::configure)
     })
     .bind(format!("{}:{}", cfg.server_host, cfg.server_port))?

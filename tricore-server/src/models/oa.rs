@@ -61,6 +61,16 @@ pub struct WorkflowArchive {
     pub archived_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct WorkflowTemplate {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub steps: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 // ═══════════════════════════════════════════════════════════
 // Join / display structs
 // ═══════════════════════════════════════════════════════════
@@ -108,7 +118,7 @@ pub struct CreateWorkflowRequest {
     pub steps: Vec<StepDefinition>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StepDefinition {
     pub step_number: i32,
     pub reviewer_id: Uuid,
@@ -126,6 +136,8 @@ pub struct ReviewStepRequest {
     pub action: String,
     pub comment: Option<String>,
     pub attachment_url: Option<String>,
+    #[serde(default)]
+    pub reject_mode: Option<String>,  // "full" or "node" when action is "reject"
 }
 
 #[derive(Debug, Serialize)]
@@ -150,4 +162,18 @@ pub struct WorkflowListQuery {
     pub creator_id: Option<Uuid>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTemplateRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub steps: Vec<StepDefinition>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateTemplateRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub steps: Option<Vec<StepDefinition>>,
 }

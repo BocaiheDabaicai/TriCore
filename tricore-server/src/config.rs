@@ -3,6 +3,7 @@ pub struct Config {
     pub server_host: String,
     pub server_port: u16,
     pub jwt_secret: String,
+    pub upload_dir: String,
 }
 
 impl Config {
@@ -18,6 +19,8 @@ impl Config {
                 .expect("SERVER_PORT must be a valid port number"),
             jwt_secret: std::env::var("JWT_SECRET")
                 .unwrap_or_else(|_| "tricore-dev-secret-2026".into()),
+            upload_dir: std::env::var("UPLOAD_DIR")
+                .unwrap_or_else(|_| "./uploads".into()),
         }
     }
 }

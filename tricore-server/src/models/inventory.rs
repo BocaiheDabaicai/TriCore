@@ -69,6 +69,23 @@ pub struct StockOutItem {
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct WarehouseInventory {
+    pub id: Uuid,
+    pub product_id: Uuid,
+    pub warehouse_id: Uuid,
+    pub quantity: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WarehouseInventoryWithName {
+    #[serde(flatten)]
+    pub inv: WarehouseInventory,
+    pub warehouse_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct Issue {
     pub id: Uuid,
     pub related_type: String,
@@ -227,4 +244,25 @@ pub struct IssueListQuery {
     pub severity: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdjustInventoryRequest {
+    pub product_id: Uuid,
+    pub operator_id: Uuid,
+    pub notes: Option<String>,
+    pub adjustments: Vec<AdjustWarehouseEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdjustWarehouseEntry {
+    pub warehouse_id: Uuid,
+    pub quantity: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdjustInventoryResponse {
+    pub stock_in_ids: Vec<Uuid>,
+    pub stock_out_ids: Vec<Uuid>,
+    pub message: String,
 }

@@ -1,6 +1,7 @@
 use actix_web::{HttpResponse, web};
 use serde::Deserialize;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::models::dto::{ApiResponse, PaginatedResponse};
@@ -298,12 +299,15 @@ pub async fn create_order(
 
     let mut tx = pool.begin().await?;
 
+    let discounts_json = body.discounts.as_ref()
+        .and_then(|d| serde_json::to_value(d).ok());
     let order = sqlx::query_as::<_, Order>(
-        "INSERT INTO orders (order_no, customer_id, salesperson_id, merchant_id, total_amount, discount_amount, final_amount, vehicle_info, driver_info, notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *"
+        "INSERT INTO orders (order_no, customer_id, salesperson_id, merchant_id, total_amount, discount_amount, final_amount, vehicle_info, driver_info, notes, discounts)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *"
     ).bind(&order_no).bind(body.customer_id).bind(body.salesperson_id)
      .bind(body.merchant_id).bind(total_d).bind(discount_d).bind(final_d)
      .bind(&body.vehicle_info).bind(&body.driver_info).bind(&body.notes)
+     .bind(&discounts_json)
     .fetch_one(&mut *tx).await?;
 
     for item in &body.items {
@@ -316,14 +320,63 @@ pub async fn create_order(
 
         let sub = rust_decimal::Decimal::try_from(item.unit_price * item.quantity as f64).unwrap_or_default();
         let up = rust_decimal::Decimal::try_from(item.unit_price).unwrap_or_default();
+        let allocs_json = if item.allocations.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_value(&item.allocations).unwrap_or_default())
+        };
         sqlx::query(
-            "INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal) VALUES ($1,$2,$3,$4,$5)"
-        ).bind(order.id).bind(item.product_id).bind(item.quantity).bind(up).bind(sub)
+            "INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal, warehouse_allocations) VALUES ($1,$2,$3,$4,$5,$6)"
+        ).bind(order.id).bind(item.product_id).bind(item.quantity).bind(up).bind(sub).bind(&allocs_json)
         .execute(&mut *tx).await?;
 
         // Deduct inventory immediately upon order creation
         sqlx::query("UPDATE products SET quantity = quantity - $1 WHERE id = $2")
             .bind(item.quantity).bind(item.product_id).execute(&mut *tx).await?;
+
+        // Deduct from warehouse_inventory based on allocations
+        if !item.allocations.is_empty() {
+            let mut allocated_total = 0i32;
+            for alloc in &item.allocations {
+                allocated_total += alloc.quantity;
+                // Verify warehouse has enough stock
+                let wi = sqlx::query_as::<_, crate::models::inventory::WarehouseInventory>(
+                    "SELECT * FROM warehouse_inventory WHERE product_id = $1 AND warehouse_id = $2"
+                ).bind(item.product_id).bind(alloc.warehouse_id)
+                .fetch_optional(&mut *tx).await?;
+                let current = wi.map(|w| w.quantity).unwrap_or(0);
+                if current < alloc.quantity {
+                    return Err(AppError::BadRequest(
+                        format!("商品「{}」在指定仓库库存不足 (可用: {}, 需要: {})", product.name, current, alloc.quantity)
+                    ));
+                }
+                sqlx::query(
+                    "UPDATE warehouse_inventory SET quantity = quantity - $1, updated_at = NOW()
+                     WHERE product_id = $2 AND warehouse_id = $3"
+                ).bind(alloc.quantity).bind(item.product_id).bind(alloc.warehouse_id)
+                .execute(&mut *tx).await?;
+            }
+            if allocated_total != item.quantity {
+                return Err(AppError::BadRequest(
+                    format!("商品「{}」的仓库分配数量合计({})与商品总数({})不一致", product.name, allocated_total, item.quantity)
+                ));
+            }
+        } else if item.quantity > 0 {
+            // No allocations provided: auto-deduct from warehouses with stock (FIFO-like)
+            let warehouses = sqlx::query_as::<_, crate::models::inventory::WarehouseInventory>(
+                "SELECT * FROM warehouse_inventory WHERE product_id = $1 AND quantity > 0 ORDER BY quantity DESC"
+            ).bind(item.product_id).fetch_all(&mut *tx).await?;
+            let mut remaining = item.quantity;
+            for wi in &warehouses {
+                if remaining <= 0 { break; }
+                let take = remaining.min(wi.quantity);
+                sqlx::query(
+                    "UPDATE warehouse_inventory SET quantity = quantity - $1, updated_at = NOW()
+                     WHERE id = $2"
+                ).bind(take).bind(wi.id).execute(&mut *tx).await?;
+                remaining -= take;
+            }
+        }
     }
 
     tx.commit().await?;
@@ -337,9 +390,14 @@ pub async fn create_order(
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateOrderRequest {
+    customer_id: Option<Uuid>,
     vehicle_info: Option<String>,
     driver_info: Option<String>,
     notes: Option<String>,
+    discount_amount: Option<f64>,
+    #[serde(default)]
+    pub discounts: Option<Vec<DiscountItem>>,
+    pub items: Option<Vec<CreateOrderItem>>,
 }
 
 pub async fn update_order(
@@ -355,15 +413,113 @@ pub async fn update_order(
         return Err(AppError::BadRequest("只有待处理的订单才能修改".into()));
     }
 
+    let mut tx = pool.begin().await?;
+
     let vehicle = body.vehicle_info.as_deref().or(existing.vehicle_info.as_deref());
     let driver = body.driver_info.as_deref().or(existing.driver_info.as_deref());
     let notes = body.notes.as_deref().or(existing.notes.as_deref());
+    let customer = body.customer_id.unwrap_or(existing.customer_id);
+
+    // If items are being updated, rollback old inventory and recalculate
+    if let Some(ref new_items) = body.items {
+        if new_items.is_empty() {
+            return Err(AppError::BadRequest("订单至少需要一个商品".into()));
+        }
+
+        // Restore old inventory
+        let old_items = sqlx::query_as::<_, OrderItem>(
+            "SELECT * FROM order_items WHERE order_id = $1"
+        ).bind(*path).fetch_all(&mut *tx).await?;
+        for oi in &old_items {
+            sqlx::query("UPDATE products SET quantity = quantity + $1 WHERE id = $2")
+                .bind(oi.quantity).bind(oi.product_id).execute(&mut *tx).await?;
+            // Restore to warehouses (distribute proportionally)
+            let wis = sqlx::query_as::<_, crate::models::inventory::WarehouseInventory>(
+                "SELECT * FROM warehouse_inventory WHERE product_id = $1 ORDER BY updated_at DESC"
+            ).bind(oi.product_id).fetch_all(&mut *tx).await?;
+            if !wis.is_empty() {
+                // Add back to the most recently updated warehouse
+                sqlx::query(
+                    "UPDATE warehouse_inventory SET quantity = quantity + $1, updated_at = NOW()
+                     WHERE id = $2"
+                ).bind(oi.quantity).bind(wis[0].id).execute(&mut *tx).await?;
+            }
+        }
+
+        // Delete old order items
+        sqlx::query("DELETE FROM order_items WHERE order_id = $1")
+            .bind(*path).execute(&mut *tx).await?;
+
+        // Recalculate totals
+        let new_total: f64 = new_items.iter().map(|i| i.unit_price * i.quantity as f64).sum();
+        let total = rust_decimal::Decimal::try_from(new_total).unwrap_or_default();
+        let discount = body.discount_amount
+            .map(|v| rust_decimal::Decimal::try_from(v).unwrap_or_default())
+            .unwrap_or(existing.discount_amount);
+        let final_amt = total - discount;
+
+        // Insert new items and deduct inventory
+        for item in new_items {
+            let product = sqlx::query_as::<_, Product>("SELECT * FROM products WHERE id = $1")
+                .bind(item.product_id).fetch_optional(&mut *tx).await?
+                .ok_or_else(|| AppError::NotFound(format!("商品 {} 不存在", item.product_id)))?;
+            if product.quantity < item.quantity {
+                return Err(AppError::BadRequest(format!("商品「{}」库存不足 (可用: {}, 需要: {})", product.name, product.quantity, item.quantity)));
+            }
+            let sub = rust_decimal::Decimal::try_from(item.unit_price * item.quantity as f64).unwrap_or_default();
+            let up = rust_decimal::Decimal::try_from(item.unit_price).unwrap_or_default();
+            let allocs_json = if item.allocations.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_value(&item.allocations).unwrap_or_default())
+            };
+            sqlx::query(
+                "INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal, warehouse_allocations) VALUES ($1,$2,$3,$4,$5,$6)"
+            ).bind(*path).bind(item.product_id).bind(item.quantity).bind(up).bind(sub).bind(&allocs_json)
+            .execute(&mut *tx).await?;
+
+            sqlx::query("UPDATE products SET quantity = quantity - $1 WHERE id = $2")
+                .bind(item.quantity).bind(item.product_id).execute(&mut *tx).await?;
+
+            // Warehouse allocations
+            if !item.allocations.is_empty() {
+                for alloc in &item.allocations {
+                    sqlx::query(
+                        "UPDATE warehouse_inventory SET quantity = quantity - $1, updated_at = NOW()
+                         WHERE product_id = $2 AND warehouse_id = $3"
+                    ).bind(alloc.quantity).bind(item.product_id).bind(alloc.warehouse_id)
+                    .execute(&mut *tx).await?;
+                }
+            }
+        }
+
+        let discounts_json = body.discounts.as_ref()
+            .and_then(|d| serde_json::to_value(d).ok());
+        sqlx::query(
+            "UPDATE orders SET total_amount=$1, discount_amount=$2, final_amount=$3, discounts=$4 WHERE id=$5"
+        ).bind(total).bind(discount).bind(final_amt).bind(&discounts_json).bind(*path)
+        .execute(&mut *tx).await?;
+    }
+
+    let discount = body.discount_amount
+        .map(|v| rust_decimal::Decimal::try_from(v).unwrap_or_default());
+
+    let discounts_json = body.discounts.as_ref()
+        .and_then(|d| serde_json::to_value(d).ok());
+    let final_amt = discount.map(|d| existing.total_amount - d);
 
     let order = sqlx::query_as::<_, Order>(
-        "UPDATE orders SET vehicle_info=$1, driver_info=$2, notes=$3 WHERE id=$4 RETURNING *"
-    ).bind(vehicle).bind(driver).bind(notes).bind(*path)
-    .fetch_one(pool.get_ref()).await?;
-    Ok(HttpResponse::Ok().json(ApiResponse::success(order)))
+        "UPDATE orders SET customer_id=$1, vehicle_info=$2, driver_info=$3, notes=$4, discounts=COALESCE($5, orders.discounts), discount_amount=COALESCE($6, orders.discount_amount), final_amount=COALESCE($7, orders.final_amount) WHERE id=$8 RETURNING *"
+    ).bind(customer).bind(vehicle).bind(driver).bind(notes).bind(&discounts_json).bind(discount).bind(final_amt).bind(*path)
+    .fetch_one(&mut *tx).await?;
+
+    tx.commit().await?;
+
+    let items = sqlx::query_as::<_, OrderItem>(
+        "SELECT * FROM order_items WHERE order_id = $1"
+    ).bind(order.id).fetch_all(pool.get_ref()).await?;
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(OrderWithItems { order, items })))
 }
 
 pub async fn update_order_status(
@@ -395,6 +551,15 @@ pub async fn update_order_status(
         for item in &items {
             sqlx::query("UPDATE products SET quantity = quantity + $1 WHERE id = $2")
                 .bind(item.quantity).bind(item.product_id).execute(&mut *tx).await?;
+            // Restore to the most recently updated warehouse for this product
+            let wi = sqlx::query_as::<_, crate::models::inventory::WarehouseInventory>(
+                "SELECT * FROM warehouse_inventory WHERE product_id = $1 ORDER BY updated_at DESC LIMIT 1"
+            ).bind(item.product_id).fetch_optional(&mut *tx).await?;
+            if let Some(w) = wi {
+                sqlx::query(
+                    "UPDATE warehouse_inventory SET quantity = quantity + $1, updated_at = NOW() WHERE id = $2"
+                ).bind(item.quantity).bind(w.id).execute(&mut *tx).await?;
+            }
         }
     }
 

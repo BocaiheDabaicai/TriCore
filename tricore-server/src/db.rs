@@ -183,6 +183,15 @@ pub async fn run_migrations(pool: &PgPool) {
             archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )",
 
+        "CREATE TABLE IF NOT EXISTS workflow_templates (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(200) NOT NULL,
+            description TEXT,
+            steps JSONB NOT NULL DEFAULT '[]',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+
         // ── INVENTORY ──
         "CREATE TABLE IF NOT EXISTS warehouses (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -240,6 +249,16 @@ pub async fn run_migrations(pool: &PgPool) {
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )",
 
+        "CREATE TABLE IF NOT EXISTS warehouse_inventory (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            product_id UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            warehouse_id UUID NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(product_id, warehouse_id)
+        )",
+
         "CREATE TABLE IF NOT EXISTS issues (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             related_type VARCHAR(30) NOT NULL,
@@ -283,6 +302,27 @@ pub async fn run_migrations(pool: &PgPool) {
             notes TEXT, is_active BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )",
+
+        // ── REGULATIONS ──
+        "CREATE TABLE IF NOT EXISTS regulation_categories (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(200) NOT NULL UNIQUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+
+        "CREATE TABLE IF NOT EXISTS regulation_files (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            title VARCHAR(500) NOT NULL,
+            category_id UUID REFERENCES regulation_categories(id) ON DELETE SET NULL,
+            notes TEXT,
+            file_name VARCHAR(500) NOT NULL,
+            file_path VARCHAR(1000) NOT NULL,
+            file_size BIGINT NOT NULL DEFAULT 0,
+            content_type VARCHAR(200) NOT NULL DEFAULT 'application/octet-stream',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
     ];
 
     let table_count = sqls.len();
@@ -314,6 +354,54 @@ pub async fn run_migrations(pool: &PgPool) {
             "INSERT INTO warehouses (name, location, is_active) VALUES ('默认仓库', '主库区', TRUE)"
         ).execute(pool).await;
         info!("seeded default warehouse");
+    }
+
+    // Add warehouse_allocations column if missing (safe ALTER)
+    let _ = sqlx::query(
+        "ALTER TABLE order_items ADD COLUMN IF NOT EXISTS warehouse_allocations JSONB"
+    ).execute(pool).await;
+
+    // Add discounts column to orders if missing (safe ALTER)
+    let _ = sqlx::query(
+        "ALTER TABLE orders ADD COLUMN IF NOT EXISTS discounts JSONB"
+    ).execute(pool).await;
+
+    // ── AI CONFIG ──
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS ai_configs (
+            id INTEGER PRIMARY KEY DEFAULT 1,
+            api_key VARCHAR(500) NOT NULL DEFAULT '',
+            model VARCHAR(200) NOT NULL DEFAULT 'claude-sonnet-4-6',
+            base_url VARCHAR(500) NOT NULL DEFAULT 'https://api.anthropic.com',
+            system_prompt TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CHECK (id = 1)
+        )"
+    ).execute(pool).await;
+
+    // Seed default AI config row if missing
+    let ai_cfg_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ai_configs")
+        .fetch_one(pool).await.unwrap_or((0,));
+    if ai_cfg_count.0 == 0 {
+        let _ = sqlx::query(
+            "INSERT INTO ai_configs (id, api_key, model, base_url) VALUES (1, '', 'claude-sonnet-4-6', 'https://api.anthropic.com')"
+        ).execute(pool).await;
+    }
+
+    // Migrate existing product quantities to warehouse_inventory
+    let mig_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM warehouse_inventory")
+        .fetch_one(pool)
+        .await
+        .unwrap_or((0,));
+    if mig_count.0 == 0 {
+        let _ = sqlx::query(
+            "INSERT INTO warehouse_inventory (product_id, warehouse_id, quantity)
+             SELECT p.id, (SELECT id FROM warehouses ORDER BY created_at LIMIT 1), p.quantity
+             FROM products p WHERE p.quantity > 0
+             ON CONFLICT (product_id, warehouse_id) DO NOTHING"
+        ).execute(pool).await;
+        info!("migrated existing product stock into warehouse_inventory");
     }
 
     info!("schema check complete — {} tables verified", table_count);

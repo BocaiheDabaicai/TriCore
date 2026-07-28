@@ -78,6 +78,18 @@ const router = createRouter({
           component: MasterDataPage,
           meta: { title: '仓库管理' },
         },
+        {
+          path: 'regulations',
+          name: 'Regulations',
+          component: () => import('@/pages/regulations/index.vue'),
+          meta: { title: '规章制度' },
+        },
+        {
+          path: 'ai/config',
+          name: 'AiConfig',
+          component: () => import('@/pages/ai/config.vue'),
+          meta: { title: 'AI 配置' },
+        },
       ],
     },
   ],

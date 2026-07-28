@@ -72,7 +72,10 @@ pub async fn auth_middleware(
     req: ServiceRequest,
     next: Next<impl actix_web::body::MessageBody + 'static>,
 ) -> Result<ServiceResponse<BoxBody>, actix_web::Error> {
-    if req.path() == "/api/auth/login" && req.method() == Method::POST {
+    // Skip auth for login endpoint and CORS preflight requests
+    if (req.path() == "/api/auth/login" && req.method() == Method::POST)
+        || req.method() == Method::OPTIONS
+    {
         return next.call(req).await.map(|r| r.map_into_boxed_body());
     }
 

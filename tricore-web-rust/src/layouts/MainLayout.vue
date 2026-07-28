@@ -7,6 +7,7 @@ import {
   ShoppingCartOutlined,
   AuditOutlined,
   DatabaseOutlined,
+  FileTextOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   UserOutlined,
@@ -16,8 +17,10 @@ import {
   TeamOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
+  RobotOutlined,
   LogoutOutlined,
 } from '@ant-design/icons-vue'
+import AiFloatingChat from '@/components/AiFloatingChat.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -56,6 +59,13 @@ const menuItems = [
   { key: '/sales',     icon: () => h(ShoppingCartOutlined), label: '销售管理' },
   { key: '/oa',       icon: () => h(AuditOutlined), label: '办公协同' },
   { key: '/inventory', icon: () => h(DatabaseOutlined), label: '库存管理' },
+  { key: '/regulations', icon: () => h(FileTextOutlined), label: '规章制度' },
+  {
+    key: 'ai', icon: () => h(RobotOutlined), label: 'AI管理',
+    children: [
+      { key: '/ai/config', label: 'AI 配置' },
+    ],
+  },
   {
     key: 'master-data', icon: () => h(SettingOutlined), label: '基础数据',
     children: [
@@ -72,6 +82,7 @@ const menuItems = [
 const openKeys = ref<string[]>([])
 const updateOpenKeys = () => {
   if (route.path.startsWith('/master-data')) openKeys.value = ['master-data']
+  if (route.path.startsWith('/ai')) openKeys.value = ['ai']
 }
 updateOpenKeys()
 
@@ -250,4 +261,7 @@ function onMenuClick({ key }: { key: string }) { router.push(key) }
       </a-layout-content>
     </a-layout>
   </a-layout>
+
+  <!-- AI Floating Chat -->
+  <AiFloatingChat />
 </template>

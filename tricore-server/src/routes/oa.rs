@@ -23,6 +23,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("/archives", web::get().to(oa::list_archives))
             .route("/archives/{id}", web::get().to(oa::get_archive))
             // Dashboard
-            .route("/dashboard", web::get().to(oa::dashboard)),
+            .route("/dashboard", web::get().to(oa::dashboard))
+            // Templates
+            .route("/templates", web::get().to(oa::list_templates))
+            .route("/templates", web::post().to(oa::create_template))
+            .route("/templates/{id}", web::put().to(oa::update_template))
+            .route("/templates/{id}", web::delete().to(oa::delete_template)),
     );
 }

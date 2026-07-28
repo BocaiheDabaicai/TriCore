@@ -1,12 +1,12 @@
 # TriCore（三核）
 
-> Sales + OA + Inventory + Master Data — 企业核心业务一体化解决方案
+> Sales + OA + Inventory + Master Data + Regulations + AI — 企业核心业务一体化智能解决方案
 
 ## 命名由来
 
 | 维度 | 说明 |
 |------|------|
-| **Tri** | 三大系统：**Sales**（销售管理）+ **OA**（办公协同）+ **Inventory**（库存管理） |
+| **Tri** | 三大核心系统：**Sales**（销售管理）+ **OA**（办公协同）+ **Inventory**（库存管理） + 辅助模块（Master Data / Regulations / AI） |
 | **Core** | 聚焦核心业务，直击本质，不做 bloated SaaS |
 | **中文名** | **三核** — 简洁有力，好记好传 |
 | **英文名** | `TriCore` — 短小精悍，适合包名、域名 |
@@ -43,6 +43,8 @@
 | Tailwind CSS 4 | 原子化 CSS 样式管理 |
 | Pinia | Vue 3 官方状态管理 |
 | Axios | HTTP 请求 |
+| ECharts | 数据可视化图表（饼图/柱状图等） |
+| marked | Markdown 解析渲染 |
 
 ### 后端 — `tricore-server`
 
@@ -55,6 +57,21 @@
 | dotenvy | 环境变量加载 |
 | bcrypt | 密码哈希 |
 | jsonwebtoken | JWT 认证（HS256，24h 有效期） |
+| reqwest | HTTP 客户端，调用外部 AI API |
+| actix-multipart | 文件上传支持 |
+| futures-util | 异步流处理（multipart 字段读取） |
+
+### AI 助手
+
+| 技术 | 用途 |
+|------|------|
+| Anthropic Messages API | Claude 系列模型（Sonnet/Opus/Haiku） |
+| OpenAI Chat Completions API | DeepSeek（V3/V4 Pro/V4 Flash/R1）/ GPT-4o 等 |
+| Function Calling / Tool Use | 7 个内置工具，自动查询数据库生成分析回答 |
+| 双格式自动适配 | 自动检测 API 类型并转换请求/响应格式 |
+| Markdown 渲染 | AI 回复自动解析为富文本（列表/代码块/表格等） |
+| 浮动面板 UI | 右下角弹出式聊天窗口，可一键放大，不遮挡操作 |
+| 可配置系统提示词 | 自定义 AI 助手行为和知识范围 |
 
 ---
 
@@ -84,12 +101,16 @@ TriCore/
 │   │   │   ├── sales/                 # 销售管理（订单 + 商品 + 分类）
 │   │   │   ├── oa/                    # 办公协同（审批 + 员工）
 │   │   │   ├── inventory/            # 库存管理（库存调整 + 出入库 + 问题追踪）
+│   │   │   ├── regulations/          # 规章制度（文件上传 + 分类管理）
+│   │   │   ├── ai/                   # AI 管理（配置 + 对话助手）
 │   │   │   └── master-data/          # 基础数据（客户 + 部门 + 职位 + 车辆 + 用户 + 仓库）
 │   │   ├── stores/                    # Pinia 状态管理
 │   │   │   ├── auth.ts               # 认证 Store（登录/登出/Token）
 │   │   │   ├── inventory.ts
 │   │   │   ├── oa.ts
 │   │   │   └── sales.ts
+│   │   ├── components/                # 公共组件
+│   │   │   └── AiFloatingChat.vue     # AI 浮动对话面板
 │   │   ├── router/index.ts           # 路由配置 + beforeEach 认证守卫
 │   │   ├── services/api.ts           # API 层 + JWT 拦截器
 │   │   └── styles/global.css         # 全局样式 + Ant Design 主题覆盖
@@ -98,15 +119,23 @@ TriCore/
 └── tricore-server/                    # Rust 后端
     ├── src/
     │   ├── routes/
+    │   │   ├── ai.rs                    # AI 对话 + 配置
     │   │   ├── auth.rs                # 认证路由（登录/当前用户）
     │   │   ├── sales.rs               # 销售 + 商品分类
     │   │   ├── oa.rs
     │   │   ├── inventory.rs
+    │   │   ├── regulation.rs          # 规章制度（文件管理）
     │   │   └── master_data.rs
     │   ├── handlers/                  # 请求处理器
+    │   │   ├── ai.rs                  # AI 对话 + 配置
+    │   │   ├── regulation.rs          # 规章制度（文件管理）
+    │   │   └── ...
     │   ├── models/                    # 数据模型 + DTO
+    │   │   ├── ai.rs                  # AI 配置 + 对话
+    │   │   ├── regulation.rs          # 规章制度
+    │   │   └── ...
     │   ├── auth.rs                    # JWT 创建/验证 + 全局认证中间件
-    │   ├── db.rs                      # 连接池 + 全部 24 张表自动创建 + 种子数据
+    │   ├── db.rs                      # 连接池 + 全量表自动创建 + 增量升级 + 种子数据
     │   ├── error.rs                   # 统一错误处理（含 401）
     │   ├── config.rs                  # 环境变量（含 JWT_SECRET）
     │   └── main.rs                    # 入口（挂载认证中间件）
@@ -133,6 +162,7 @@ TriCore/
 | `workflow_forms` + `workflow_steps` | OA | 审批流程 + 步骤 |
 | `workflow_archives` | OA | 流程归档 |
 | `warehouses` | Inventory | 仓库 |
+| `warehouse_inventory` | Inventory | 仓库库存（商品-仓库多对多） |
 | `stock_in_records` + `stock_in_items` | Inventory | 入库单 |
 | `stock_out_records` + `stock_out_items` | Inventory | 出库单 |
 | `issues` | Inventory | 问题追踪 |
@@ -140,16 +170,24 @@ TriCore/
 | `departments` | Master Data | 部门 |
 | `positions` | Master Data | 职位 |
 | `vehicles` | Master Data | 车辆 |
+| `regulation_categories` | Regulations | 文件分类 |
+| `regulation_files` | Regulations | 规章制度文件 |
+| `workflow_templates` | OA | 流程架构模板（steps JSONB） |
+| `ai_configs` | AI | AI 配置（单行，CHECK id=1） |
+
+> 注：`orders` 表通过 `ALTER TABLE ADD COLUMN IF NOT EXISTS` 增量新增了 `discounts JSONB` 列（折扣明细持久化）；`order_items` 表新增了 `warehouse_allocations JSONB` 列（仓库分配数据）。
 
 ### 种子数据
 
 首次启动时自动创建（如果数据为空）：
 - 管理员账号：`admin` / `admin123`
 - 默认仓库：「默认仓库」
+- AI 配置默认行（API Key 为空，需手动配置）
+- 默认仓库：「默认仓库」
 
 ### Schema 管理
 
-后端 `db.rs` 在每次启动时执行幂等 SQL（`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS`），确保 schema 始终是最新状态，不依赖 `sqlx::migrate`。
+后端 `db.rs` 在每次启动时执行幂等 SQL（`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS`），确保 schema 始终是最新状态。新增表/列直接在 `db.rs` 中追加即可。
 
 ---
 
@@ -172,7 +210,7 @@ TriCore/
 | POST/PUT | `/products`, `/products/{id}` | 新增/编辑商品 |
 | GET | `/orders` | 订单列表 |
 | POST | `/orders` | 创建订单（校验库存并扣减） |
-| PUT | `/orders/{id}` | 编辑待处理订单 |
+| PUT | `/orders/{id}` | 编辑订单（支持修改全部信息，含库存回滚/重扣） |
 | PATCH | `/orders/{id}/status` | 变更状态（取消→恢复库存，发货→生成出库单） |
 | GET/POST | `/bundles`, `/returns` | 捆绑销售 / 退单 |
 | GET/POST/PUT/DELETE | `/categories` | 商品分类 CRUD |
@@ -187,7 +225,9 @@ TriCore/
 | GET/POST | `/workflows`, `/workflows/{id}` | 流程 CRUD |
 | PUT/DELETE | `/workflows/{id}` | 编辑/删除流程 |
 | POST | `/workflows/{id}/submit` | 提交/重新提交流程 |
-| POST | `/workflows/{id}/steps/{step}/review` | 审核步骤 |
+| POST | `/workflows/{id}/steps/{step}/review` | 审核步骤（支持 `reject_mode`: full/node） |
+| GET/POST | `/templates` | 流程架构模板列表/创建 |
+| PUT/DELETE | `/templates/{id}` | 编辑/删除架构模板 |
 | GET | `/dashboard` | OA 仪表盘 |
 
 ### Inventory — `/api/inventory`
@@ -202,6 +242,8 @@ TriCore/
 | GET/POST/PUT | `/issues` | 问题追踪 CRUD |
 | PUT | `/issues/{id}/resolve` | 解决问题 |
 | GET/POST/PUT/DELETE | `/warehouses` | 仓库 CRUD |
+| GET | `/warehouse-inventory/{product_id}` | 查询商品在各仓库的库存分布 |
+| POST | `/adjust` | 批量仓库库存调整（自动生成出入库单） |
 
 ### Master Data — `/api/master-data`
 
@@ -216,6 +258,26 @@ TriCore/
 | GET/POST | `/vehicles` | 车辆列表/新增 |
 | PUT/DELETE | `/vehicles/{id}` | 编辑/删除车辆 |
 
+### Regulations — `/api/regulations`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET/POST | `/categories` | 文件分类列表/新增 |
+| DELETE | `/categories/{id}` | 删除分类 |
+| GET | `/files` | 文件列表（支持 `?title=` + `?category_id=` 筛选） |
+| POST | `/files` | 上传文件（multipart，50MB 限制） |
+| PUT | `/files/{id}` | 更新文件元数据 |
+| DELETE | `/files/{id}` | 删除文件（DB + 磁盘） |
+| GET | `/files/{id}/download` | 下载/预览文件 |
+
+### AI — `/api/ai`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/config` | 获取 AI 配置（API Key、模型、地址） |
+| PUT | `/config` | 更新 AI 配置 |
+| POST | `/chat` | AI 对话（Function Calling，自动调用工具查询数据库） |
+
 ---
 
 ## 快速开始
@@ -224,8 +286,10 @@ TriCore/
 
 ```bash
 cd tricore-server
+# 创建 uploads 目录（可选，后端会自动创建）
 cargo run
 # 服务启动在 http://localhost:8080
+# 首次启动自动创建所有数据库表和种子数据
 ```
 
 ### 2. 启动前端（Vue 3 — 主力开发）
@@ -237,7 +301,11 @@ npm run dev
 # 开发服务器启动在 http://localhost:5174
 ```
 
-### 3. 启动前端（React）
+### 3. 配置 AI 助手（可选）
+
+访问「AI 管理 → AI 配置」，填入 API Key 和选择模型即可启用浮动 AI 对话助手。
+
+### 4. 启动前端（React — 已弃用，不再维护）
 
 ```bash
 cd tricore-web
@@ -259,13 +327,15 @@ npm run dev
 
 ### 工作台 (Dashboard)
 
-- 六张统计卡片（销售订单、员工数量、商品种类、待处理流程、库存预警、本月完成）
-- 员工数量实时反映数据库在职员工数
-- 三大核心模块概览
+- 六张统计卡片（销售订单、在职员工、商品种类、待审流程、库存预警、规章制度文件数），图标 + 数值 + 趋势标签，hover 上浮动画
+- **ECharts 数据图表**：订单状态环形饼图 + 商品库存横向柱状图（红黄绿三级预警着色）
+- **暗色/亮色双主题自适应**：图表跟随系统主题自动切换配色，文字/网格线/柱色均适配
+- 信息概览栏（本月入库/出库量、待解决问题数、系统运行状态）
+- **6 模块快捷入口**：销售管理、办公协同、库存管理、基础数据、规章制度、AI 助手，点击跳转
 
 ### 销售管理 (Sales)
 
-- **订单管理**：创建订单（客户/配送车辆下拉关联基础数据 + 多商品行 + 单位只读 + 折扣叠加百分比/固定金额 + 优惠备注）、订单详情、状态流转（取消时恢复库存，发货时生成出库单）
+- **订单管理**：创建订单（客户/配送车辆下拉 + 按仓库分配商品数量 + 折扣叠加百分比/固定金额/备注）、订单详情（卡片式布局，含客户信息/金额算式/商品明细/各仓库当前库存）、订单编辑（完整还原创建时全部信息含仓库分配）、状态流转（取消→恢复双库存，发货→生成出库单）
 - **商品管理**：SKU 自动生成、价格、库存、分类下拉（关联分类管理数据）
 - **商品分类管理**：独立的增删改查 Tab
 - 待处理订单可编辑车辆/备注
@@ -273,12 +343,16 @@ npm run dev
 ### 办公协同 (OA)
 
 - **审批流程**：多步骤流程创建、提交、审核（通过/退回）、被退回流程修改后重新提交、删除
+- **顺序审批**：后置步骤必须等前置全部通过才能审核，后端严格校验
+- **双退回模式**：完全退回（重置全部步骤从头审批）和本结点退回（已通过步骤保留，仅退回当前节点）
+- **流程架构配置**：保存常用审批模板（名称 + 描述 + 审核步骤），新建流程时一键套用
 - **员工管理**：工号自动生成、部门/职位下拉选择、增删改查
 
 ### 库存管理 (Inventory)
 
-- **库存调整**：选择仓库 + 入库/出库调整，自动生成出入库记录
-- **入库/出库**：记录列表查看，列宽宽松
+- **库存调整**：展示各仓库当前库存 + 可调目标数量 + 下拉选择仓库，系统自动判断 delta 生成入库单/出库单，备注关联到单据
+- **库存列表**：总库存 = 各仓库 inventory 数量之和
+- **入库/出库**：记录列表（含仓库列 + 详情按钮），可查看完整单据信息（商品明细/仓库/备注/时间）
 - **问题追踪**：登记（自动填入报告人）、Modal 文本域解决、严重程度分类
 
 ### 基础数据 (Master Data)
@@ -292,6 +366,89 @@ npm run dev
 - **用户管理**：工号自动生成、部门/职位联动下拉（选部门后过滤职位）、密码、角色
 - **仓库管理**：仓库名称、位置、启用状态
 
+### 规章制度 (Regulations)
+
+- **文件上传**：Ant Design `<a-upload>` 组件，multipart 上传，50MB 限制
+- **文件管理**：文件列表，按文件名关键字 / 分类下拉筛选查询
+- **分类管理**：弹窗式分类增删，支持关键字筛选，上传表单内嵌分类管理按钮，分类删除时关联文件自动变为未分类
+- **文件预览**：Axios blob 下载（携带 JWT Token）→ Blob URL → `window.open`，浏览器内直接查看 PDF、图片等
+- **侧边栏入口**：独立菜单项（FileTextOutlined 图标）
+
+### AI 智能化方案
+
+基于当前系统架构和 AI 技术发展趋势，规划以下三个阶段的 AI 集成方案：
+
+---
+
+#### 方案一：AI 对话助手 ✅ 已实现
+
+**概述**：系统内常驻 AI 对话面板，通过 **Function Calling** 直接对接数据库，用户以自然语言与系统交互。
+
+**能力示例**：
+- *「本月销售额最高的 5 个订单是哪些？」* → AI 调用 `/api/sales/orders` 查询并总结
+- *「库存低于 50 的商品有哪些？」* → 自动查询并预警
+- *「张三还有哪些待审批的流程？」* → 查询 OA 流程并列出
+- *「最近上传的安全规范文件有哪些？」* → 查询规章制度文件
+- *「系统整体情况怎么样？」* → 获取 Dashboard 概览统计
+
+**技术实现**：
+- 后端 `/api/ai/chat` 接口，对接 Claude API（兼容 Anthropic Messages API 格式）
+- 定义 7 个 Tool 函数映射到系统现有数据查询能力
+- 前端 AI 对话组件（聊天气泡 UI）
+- 可配置的模型选择（Claude/DeepSeek/GPT-4o）、API Key、系统提示词
+- 完整的 Tool Use 循环（最多 5 轮），AI 自动选择工具 → 查询数据库 → 分析回答
+
+**优势**：改动最小，不侵入现有模块，一个入口覆盖全系统。
+
+---
+
+#### 方案二：规章制度 RAG（文档智能问答）
+
+**概述**：针对「规章制度」模块，让用户直接对已上传的文件内容进行提问。
+
+**能力示例**：
+- *「安全规范中对仓库管理有什么要求？」* → AI 从规范文件中检索相关内容回答
+- *「对比一下 A 文件和 B 文件中关于考勤的规定」* → 跨文件检索对比
+
+**技术实现**：
+- 文件上传时自动提取文本内容（PDF/Word/txt）并向量化存储
+- 新增 `/api/ai/ask-document` 接口，基于 RAG（检索增强生成）回答
+- 前端文件列表新增「提问」按钮
+- 依赖：Embedding 模型 + 向量数据库（可用 PostgreSQL `pgvector` 扩展）
+
+**预估工期**：2-3 天
+
+---
+
+#### 方案三：模块内嵌 AI 分析
+
+**概述**：在各业务模块页面中嵌入 AI 分析卡片，提供主动式智能洞察。
+
+**能力示例**：
+- 销售管理：*「本周销售趋势」「商品关联分析」「异常订单检测」*
+- 库存管理：*「库存周转分析」「缺货风险预警」「补货建议」*
+- 办公协同：*「审批效率分析」「流程瓶颈识别」*
+- 规章制度：*「文件摘要」「关键条款提取」*
+
+**技术实现**：
+- 各模块新增 `AIAnalysisCard` 组件
+- 后端为每个模块提供分析 API（调用 LLM + 数据查询）
+- 前端渲染 Markdown 分析结果
+
+**预估工期**：3-5 天
+
+---
+
+#### 实施建议
+
+| 阶段 | 方案 | 状态 | 投入产出比 |
+|------|------|------|-----------|
+| 第一阶段 | AI 对话助手 | ✅ 已完成 | ⭐⭐⭐⭐⭐ 最高 |
+| 第二阶段 | 规章制度 RAG | 📋 待实施 | ⭐⭐⭐⭐ 高 |
+| 第三阶段 | 模块内嵌 AI 分析 | 📋 待实施 | ⭐⭐⭐ 中 |
+
+> **设计原则**：所有 AI 功能均通过后端中转调用外部 API，前端不直接暴露 API Key。配置持久化在数据库，UI 中可随时修改，无需重启服务。
+
 ---
 
 ## UI 设计特性
@@ -301,11 +458,74 @@ npm run dev
 - 渐变动画标题文字
 - 点阵科技感背景
 - Ant Design 组件全主题覆盖（Menu、Table、Modal、Button、Tag、Tabs 等）
-- 统一的 `page-header` / `glass-card` / `gradient-text` 组件类
+- 统一的 `page-header` / `glass-card` / `gradient-text` / `stat-icon-circle` 组件类
+- ECharts 数据可视化图表（饼图/柱状图），暗亮双主题自适应
+- 浮动 AI 对话面板（右下角弹出，可放大，Markdown 富文本渲染）
+- 统计卡片 hover 上浮动画 + 模块快捷入口边框高亮过渡
 
 ---
 
 ## 更新日志
+
+### 2026-07-28
+
+#### AI 助手
+
+- **AI 对话助手**：浮动按钮触发（右下角），弹出式聊天面板（440×520，支持一键放大至 720×680），聊天气泡 UI + 滑入动画，面板完全与页面内容叠加不遮挡操作
+- **自然语言数据查询**：基于 Function Calling 实现 7 个内置工具（订单查询 `query_orders`、商品库存 `query_products`、库存状况 `query_inventory`、审批流程 `query_workflows`、员工信息 `query_employees`、规章制度 `query_regulations`、系统概览 `get_dashboard`），AI 自动选择合适的工具调用后端查询数据库，基于最新数据生成分析回答
+- **双 API 格式兼容**：自动检测 API 类型，Anthropic Messages API（Claude/Claude Opus/Claude Haiku）和 OpenAI Chat Completions API（DeepSeek V3/V4 Pro/V4 Flash/R1/OpenAI 兼容代理）均无缝支持，Tool Use / Tool Calls 双向转换透明处理
+- **Markdown 富文本渲染**：AI 回复自动解析 Markdown 格式（粗体/列表/代码块/表格/引用/标题），用户消息保持纯文本
+- **可配置模型**：DeepSeek V4 Pro (1m)、DeepSeek V4 Flash、DeepSeek V3、DeepSeek R1、Claude Sonnet/Opus/Haiku、GPT-4o 等
+- **AI 配置页面**：API Key（可切换显示）、模型选择、API 地址、自定义系统提示词，居中卡片式 UI，配置持久化在数据库即时生效
+- **AI 智能化方案文档**：README 补充完整的三阶段 AI 战略路线图（AI 对话助手 ✅ / 规章制度 RAG 📋 / 模块内嵌分析 📋）
+
+#### 工作台
+
+- **ECharts 图表集成**：订单状态环形饼图 + 商品库存横向柱状图（红黄绿三级预警着色），暗色/亮色双主题自适应，切换主题时图表自动销毁重建
+- **6 模块快捷入口**：销售管理、办公协同、库存管理、基础数据、规章制度、AI 助手，hover 上浮 + 边框高亮动画，点击直接跳转
+- **信息概览栏**：本月入库/出库量、待解决问题数、系统运行状态标签
+- **统计卡片增强**：6 张卡片（销售订单、在职员工、商品种类、待审流程、库存预警、规章制度文件数），图标 + 数值 + 趋势标签
+
+#### 规章制度
+
+- **文件管理**：multipart 文件上传（50MB 限制）、文件列表、按文件名关键字 / 分类下拉筛选
+- **分类管理**：弹窗式分类增删，支持关键字筛选，上传表单内嵌分类管理按钮
+- **文件预览**：使用 `axios` blob 下载（携带 JWT token）创建 Blob URL 后浏览器内直接预览 PDF、图片等，避免直接拼接 URL 导致的 401 认证失败
+- **UI 优化**：文件上传改为 Ant Design `<a-upload>` 组件，搜索输入框样式统一，分类 Modal 层级修复（zIndex 覆盖上传弹窗）
+
+#### 审批流程增强
+
+- **顺序审批**：后置步骤必须等前置步骤全部通过才能审核，后端严格校验
+- **双退回模式**：完全退回（重置全部步骤，重新从头审批）和本结点退回（已通过步骤保留，仅退回当前节点，重新提交后直达退回节点）
+- **流程架构配置**：保存常用审批模板（名称 + 描述 + 审核步骤 JSONB），新建流程时一键套用标题/描述/步骤，架构支持编辑和删除
+- **创建流程优化**：描述字段改为 `TextArea` 文本域（3 行），新增「使用流程架构」按钮弹窗选择模板
+
+#### 销售管理
+
+- **订单编辑完善**：编辑时完整带出创建时的仓库分配数量（动态加载当前库存并合并保存的分配数据）、折扣明细（后端 `orders.discounts` JSONB 列持久化）、车辆司机信息（通过车牌号匹配下拉选项）
+- **订单详情仓库分配**：详情页优先展示 `warehouse_allocations` 原始分配记录，回退显示各仓库当前库存
+- **库存数据修正**：修复「水」商品总库存与仓库库存合计不一致的问题（`products.quantity` 与 `SUM(warehouse_inventory.quantity)` 对齐）
+
+#### 后端基础设施
+
+- **新增依赖**：`actix-multipart`、`futures-util`、`reqwest`
+- **新增表**：`regulation_categories`、`regulation_files`、`workflow_templates`、`ai_configs`、`orders.discounts`（ALTER TABLE ADD COLUMN）
+- **API 路由**：`/api/regulations/*`（7 个端点）、`/api/ai/*`（3 个端点）、`/api/oa/templates/*`（4 个端点）
+- **DB Schema 管理**：`ai_configs` 单行配置表（CHECK id=1）+ 首次启动自动种子默认值
+
+### 2026-07-23
+
+- **仓库级库存系统**：新增 `warehouse_inventory` 表（商品-仓库多对多），`complete_stock_in` / `create_stock_out` / `create_order` / `update_order` / 取消订单均同步维护双库存
+- **库存调整重新设计**：商品层 → 仓库层，展示各仓库当前库存 + 可调目标数量 + 下拉选择仓库，根据 delta 正负自动生成入库单/出库单，备注关联到单据
+- **订单创建按仓库分配**：选择商品后自动加载各仓库可用库存，逐仓填写分配数量，后端精准从指定仓库扣减
+- **订单编辑完整化**：编辑界面与创建完全一致（含仓库分配数据），数据通过 `warehouse_allocations` JSONB 列持久化，支持修改全部信息并回滚/重扣库存
+- **订单详情 UI 重新设计**：卡片式布局，分基本信息/客户/配送/金额算式/商品明细（含各仓库当前库存）/备注六个区域
+- **入库/出库详情 Modal**：列表新增「详情」按钮，展示单据信息、商品明细、仓库、备注、时间
+- **优惠顺序计算修复**：多个优惠项从前向后依次应用于前一结果，而非全部基于原始总额
+- **商品选择限制**：库存为 0 的商品不可选；数量输入框受库存上限约束
+- **Schema 管理清理**：移除不安全的旧 SQL 迁移文件，由 `db.rs` 统一管理（`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS`）
+- **后端审计 + 修复**：全量 schema 与模型 100% 对齐验证，86 条路由全部 handler 覆盖，CORS 预检被认证中间件拦截 bug 修复
+- **数据库清理**：清空旧种子测试数据，重建管理员账号 `admin/123456`
 
 ### 2026-07-22
 

@@ -4,6 +4,9 @@ use crate::handlers::inventory;
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/inventory")
+            // Warehouse Inventory
+            .route("/warehouse-inventory/{product_id}", web::get().to(inventory::get_warehouse_inventory))
+            .route("/adjust", web::post().to(inventory::adjust_inventory))
             // Warehouses
             .route("/warehouses", web::get().to(inventory::list_warehouses))
             .route("/warehouses/{id}", web::get().to(inventory::get_warehouse))

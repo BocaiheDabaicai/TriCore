@@ -55,6 +55,7 @@ pub struct Order {
     pub vehicle_info: Option<String>,
     pub driver_info: Option<String>,
     pub notes: Option<String>,
+    pub discounts: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -67,6 +68,7 @@ pub struct OrderItem {
     pub quantity: i32,
     pub unit_price: rust_decimal::Decimal,
     pub subtotal: rust_decimal::Decimal,
+    pub warehouse_allocations: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -216,6 +218,14 @@ pub struct UpdateProductRequest {
     pub is_active: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DiscountItem {
+    pub mode: String,
+    pub value: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateOrderRequest {
     pub customer_id: Uuid,
@@ -225,6 +235,8 @@ pub struct CreateOrderRequest {
     pub vehicle_info: Option<String>,
     pub driver_info: Option<String>,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub discounts: Option<Vec<DiscountItem>>,
     pub items: Vec<CreateOrderItem>,
 }
 
@@ -233,6 +245,14 @@ pub struct CreateOrderItem {
     pub product_id: Uuid,
     pub quantity: i32,
     pub unit_price: f64,
+    #[serde(default)]
+    pub allocations: Vec<CreateOrderAllocation>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateOrderAllocation {
+    pub warehouse_id: Uuid,
+    pub quantity: i32,
 }
 
 #[derive(Debug, Deserialize)]

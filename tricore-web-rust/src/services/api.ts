@@ -87,6 +87,11 @@ export const oaAPI = {
   listArchives: (params?: Record<string, unknown>) => api.get('/oa/archives', { params }),
   getArchive: (id: string) => api.get(`/oa/archives/${id}`),
   getDashboard: () => api.get('/oa/dashboard'),
+  // Templates
+  listTemplates: () => api.get('/oa/templates'),
+  createTemplate: (data: Record<string, unknown>) => api.post('/oa/templates', data),
+  updateTemplate: (id: string, data: Record<string, unknown>) => api.put(`/oa/templates/${id}`, data),
+  deleteTemplate: (id: string) => api.delete(`/oa/templates/${id}`),
 }
 
 export const inventoryAPI = {
@@ -112,6 +117,38 @@ export const inventoryAPI = {
   resolveIssue: (id: string, data: { resolution: string }) => api.put(`/inventory/issues/${id}/resolve`, data),
   listProducts: () => api.get('/inventory/products'),
   getDashboard: () => api.get('/inventory/dashboard'),
+  getWarehouseInventory: (productId: string) => api.get(`/inventory/warehouse-inventory/${productId}`),
+  adjustInventory: (data: Record<string, unknown>) => api.post('/inventory/adjust', data),
+}
+
+export const aiAPI = {
+  getConfig: () => api.get('/ai/config'),
+  updateConfig: (data: Record<string, unknown>) => api.put('/ai/config', data),
+  chat: (messages: { role: string; content: string }[]) => api.post('/ai/chat', { messages }),
+}
+
+export const regulationsAPI = {
+  // Categories
+  listCategories: (params?: { name?: string }) =>
+    api.get('/regulations/categories', { params }),
+  createCategory: (data: { name: string }) =>
+    api.post('/regulations/categories', data),
+  deleteCategory: (id: string) =>
+    api.delete(`/regulations/categories/${id}`),
+  // Files
+  listFiles: (params?: { title?: string; category_id?: string; page?: number; per_page?: number }) =>
+    api.get('/regulations/files', { params }),
+  getFile: (id: string) =>
+    api.get(`/regulations/files/${id}`),
+  uploadFile: (formData: FormData) =>
+    api.post('/regulations/files', formData, {
+      headers: { 'Content-Type': undefined as any },
+    }),
+  updateFile: (id: string, data: Record<string, unknown>) =>
+    api.put(`/regulations/files/${id}`, data),
+  deleteFile: (id: string) =>
+    api.delete(`/regulations/files/${id}`),
+  downloadUrl: (id: string) => `/api/regulations/files/${id}/download`,
 }
 
 export const masterDataAPI = {

@@ -1,5 +1,6 @@
 use actix_web::{HttpResponse, web};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::models::dto::{ApiResponse, PaginatedResponse};
@@ -69,6 +70,171 @@ pub async fn delete_warehouse(
         .bind(*path).execute(pool.get_ref()).await?.rows_affected();
     if rows == 0 { return Err(AppError::NotFound("仓库不存在".into())); }
     Ok(HttpResponse::Ok().json(ApiResponse::<String>::message("已删除")))
+}
+
+// ═══════════════════════════════════════════════════════════
+// WAREHOUSE INVENTORY
+// ═══════════════════════════════════════════════════════════
+
+pub async fn get_warehouse_inventory(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let rows = sqlx::query_as::<_, WarehouseInventory>(
+        "SELECT * FROM warehouse_inventory WHERE product_id = $1 ORDER BY quantity DESC"
+    ).bind(*path).fetch_all(pool.get_ref()).await?;
+
+    let mut result: Vec<WarehouseInventoryWithName> = vec![];
+    for inv in rows {
+        let wn: (String,) = sqlx::query_as("SELECT name FROM warehouses WHERE id = $1")
+            .bind(inv.warehouse_id).fetch_one(pool.get_ref()).await
+            .unwrap_or(("未知仓库".into(),));
+        result.push(WarehouseInventoryWithName { inv, warehouse_name: wn.0 });
+    }
+    Ok(HttpResponse::Ok().json(ApiResponse::success(result)))
+}
+
+pub async fn adjust_inventory(
+    pool: web::Data<PgPool>,
+    body: web::Json<AdjustInventoryRequest>,
+) -> Result<HttpResponse, AppError> {
+    if body.adjustments.is_empty() {
+        return Err(AppError::BadRequest("至少需要一个仓库调整项".into()));
+    }
+
+    let product = sqlx::query_as::<_, Product>("SELECT * FROM products WHERE id = $1")
+        .bind(body.product_id).fetch_optional(pool.get_ref()).await?
+        .ok_or_else(|| AppError::NotFound("商品不存在".into()))?;
+
+    let mut stock_in_ids: Vec<Uuid> = vec![];
+    let mut stock_out_ids: Vec<Uuid> = vec![];
+
+    for adj in &body.adjustments {
+        let current = sqlx::query_as::<_, WarehouseInventory>(
+            "SELECT * FROM warehouse_inventory WHERE product_id = $1 AND warehouse_id = $2"
+        ).bind(body.product_id).bind(adj.warehouse_id)
+        .fetch_optional(pool.get_ref()).await?;
+
+        let current_qty = current.as_ref().map(|c| c.quantity).unwrap_or(0);
+        let delta = adj.quantity - current_qty;
+
+        if delta == 0 {
+            // Upsert warehouse_inventory to ensure row exists
+            sqlx::query(
+                "INSERT INTO warehouse_inventory (product_id, warehouse_id, quantity)
+                 VALUES ($1,$2,$3)
+                 ON CONFLICT (product_id, warehouse_id) DO UPDATE SET quantity = EXCLUDED.quantity, updated_at = NOW()"
+            ).bind(body.product_id).bind(adj.warehouse_id).bind(adj.quantity)
+            .execute(pool.get_ref()).await?;
+            continue;
+        }
+
+        let notes = body.notes.clone().unwrap_or_else(|| {
+            format!("库存调整: {} {} ({} → {})",
+                product.name,
+                if delta > 0 { "入库" } else { "出库" },
+                current_qty, adj.quantity)
+        });
+
+        if delta > 0 {
+            // Stock-in flow
+            let stock_in_no = format!("SIN-{}-{:06}", chrono::Utc::now().format("%Y%m%d"), rand::random::<u16>() % 10000);
+            let mut tx = pool.begin().await?;
+
+            let record = sqlx::query_as::<_, StockInRecord>(
+                "INSERT INTO stock_in_records (stock_in_no, warehouse_id, operator_id, notes)
+                 VALUES ($1,$2,$3,$4) RETURNING *"
+            ).bind(&stock_in_no).bind(adj.warehouse_id).bind(body.operator_id).bind(&notes)
+            .fetch_one(&mut *tx).await?;
+
+            sqlx::query(
+                "INSERT INTO stock_in_items (stock_in_id, product_id, expected_quantity, actual_quantity)
+                 VALUES ($1,$2,$3,$4)"
+            ).bind(record.id).bind(body.product_id).bind(delta).bind(delta)
+            .execute(&mut *tx).await?;
+
+            // Verify + complete directly
+            let items = sqlx::query_as::<_, StockInItem>(
+                "SELECT * FROM stock_in_items WHERE stock_in_id = $1"
+            ).bind(record.id).fetch_all(&mut *tx).await?;
+
+            for item in &items {
+                sqlx::query("UPDATE stock_in_items SET actual_quantity = $1 WHERE id = $2")
+                    .bind(delta).bind(item.id).execute(&mut *tx).await?;
+            }
+            sqlx::query("UPDATE stock_in_records SET status='verified' WHERE id=$1")
+                .bind(record.id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE products SET quantity = quantity + $1 WHERE id = $2")
+                .bind(delta).bind(body.product_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE stock_in_records SET status='completed' WHERE id=$1")
+                .bind(record.id).execute(&mut *tx).await?;
+
+            // Update warehouse_inventory
+            sqlx::query(
+                "INSERT INTO warehouse_inventory (product_id, warehouse_id, quantity)
+                 VALUES ($1,$2,$3)
+                 ON CONFLICT (product_id, warehouse_id) DO UPDATE SET quantity = warehouse_inventory.quantity + EXCLUDED.quantity, updated_at = NOW()"
+            ).bind(body.product_id).bind(adj.warehouse_id).bind(delta)
+            .execute(&mut *tx).await?;
+
+            tx.commit().await?;
+            stock_in_ids.push(record.id);
+        } else {
+            // Stock-out flow
+            let out_qty = -delta;
+            if current_qty < out_qty {
+                return Err(AppError::BadRequest(
+                    format!("仓库库存不足，当前 {} 件，尝试出库 {} 件", current_qty, out_qty)
+                ));
+            }
+            let mut tx = pool.begin().await?;
+
+            // Check product stock
+            let prod = sqlx::query_as::<_, Product>("SELECT * FROM products WHERE id = $1")
+                .bind(body.product_id).fetch_optional(&mut *tx).await?
+                .ok_or_else(|| AppError::NotFound("商品不存在".into()))?;
+            if prod.quantity < out_qty {
+                return Err(AppError::BadRequest(
+                    format!("商品总库存不足 (可用: {}, 需要: {})", prod.quantity, out_qty)
+                ));
+            }
+
+            let stock_out_no = format!("SOUT-{}-{:06}", chrono::Utc::now().format("%Y%m%d"), rand::random::<u16>() % 10000);
+            let record = sqlx::query_as::<_, StockOutRecord>(
+                "INSERT INTO stock_out_records (stock_out_no, warehouse_id, operator_id, notes)
+                 VALUES ($1,$2,$3,$4) RETURNING *"
+            ).bind(&stock_out_no).bind(adj.warehouse_id).bind(body.operator_id).bind(&notes)
+            .fetch_one(&mut *tx).await?;
+
+            sqlx::query(
+                "INSERT INTO stock_out_items (stock_out_id, product_id, quantity)
+                 VALUES ($1,$2,$3)"
+            ).bind(record.id).bind(body.product_id).bind(out_qty)
+            .execute(&mut *tx).await?;
+
+            sqlx::query("UPDATE products SET quantity = quantity - $1 WHERE id = $2")
+                .bind(out_qty).bind(body.product_id).execute(&mut *tx).await?;
+
+            sqlx::query(
+                "UPDATE warehouse_inventory SET quantity = quantity - $1, updated_at = NOW()
+                 WHERE product_id = $2 AND warehouse_id = $3"
+            ).bind(out_qty).bind(body.product_id).bind(adj.warehouse_id)
+            .execute(&mut *tx).await?;
+
+            tx.commit().await?;
+            stock_out_ids.push(record.id);
+        }
+    }
+
+    let mut parts: Vec<String> = vec![];
+    if !stock_in_ids.is_empty() { parts.push(format!("入库 {} 条", stock_in_ids.len())); }
+    if !stock_out_ids.is_empty() { parts.push(format!("出库 {} 条", stock_out_ids.len())); }
+
+    Ok(HttpResponse::Ok().json(ApiResponse::success(AdjustInventoryResponse {
+        stock_in_ids,
+        stock_out_ids,
+        message: format!("调整完成: {}", parts.join(", ")),
+    })))
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -216,6 +382,12 @@ pub async fn complete_stock_in(
     for item in &items {
         sqlx::query("UPDATE products SET quantity = quantity + $1 WHERE id = $2")
             .bind(item.actual_quantity).bind(item.product_id).execute(&mut *tx).await?;
+        sqlx::query(
+            "INSERT INTO warehouse_inventory (product_id, warehouse_id, quantity)
+             VALUES ($1,$2,$3)
+             ON CONFLICT (product_id, warehouse_id) DO UPDATE SET quantity = warehouse_inventory.quantity + EXCLUDED.quantity, updated_at = NOW()"
+        ).bind(item.product_id).bind(record.warehouse_id).bind(item.actual_quantity)
+        .execute(&mut *tx).await?;
     }
 
     sqlx::query("UPDATE stock_in_records SET status='completed' WHERE id=$1")
@@ -324,6 +496,12 @@ pub async fn create_stock_out(
 
         sqlx::query("UPDATE products SET quantity = quantity - $1 WHERE id = $2")
             .bind(item.quantity).bind(item.product_id).execute(&mut *tx).await?;
+
+        sqlx::query(
+            "UPDATE warehouse_inventory SET quantity = quantity - $1, updated_at = NOW()
+             WHERE product_id = $2 AND warehouse_id = $3 AND quantity >= $1"
+        ).bind(item.quantity).bind(item.product_id).bind(record.warehouse_id)
+        .execute(&mut *tx).await?;
     }
 
     tx.commit().await?;

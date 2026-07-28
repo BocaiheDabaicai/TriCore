@@ -253,14 +253,29 @@ pub async fn submit_workflow(
         return Err(AppError::BadRequest("当前状态不可提交".into()));
     }
 
-    // Reset current step and status
-    let wf = sqlx::query_as::<_, WorkflowForm>(
-        "UPDATE workflow_forms SET status='in_progress', current_step=1 WHERE id=$1 RETURNING *"
+    // Check if any steps are already approved (node rejection scenario)
+    let approved_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM workflow_steps WHERE workflow_id = $1 AND status = 'approved'"
     ).bind(*path).fetch_one(pool.get_ref()).await?;
 
-    // Reset all steps to pending
-    sqlx::query("UPDATE workflow_steps SET status='pending', comment=NULL, acted_at=NULL WHERE workflow_id=$1")
-        .bind(*path).execute(pool.get_ref()).await?;
+    let start_step = if approved_count.0 > 0 {
+        // Node rejection: find the first rejected step, reset from there
+        let first_rejected: (i32,) = sqlx::query_as(
+            "SELECT COALESCE(MIN(step_number), 1) FROM workflow_steps WHERE workflow_id = $1 AND status = 'rejected'"
+        ).bind(*path).fetch_one(pool.get_ref()).await?;
+        first_rejected.0
+    } else {
+        1
+    };
+
+    let wf = sqlx::query_as::<_, WorkflowForm>(
+        "UPDATE workflow_forms SET status='in_progress', current_step=$1 WHERE id=$2 RETURNING *"
+    ).bind(start_step).bind(*path).fetch_one(pool.get_ref()).await?;
+
+    // Reset steps from the target step onwards (for full rejection: all steps; for node: only rejected & beyond)
+    sqlx::query(
+        "UPDATE workflow_steps SET status='pending', comment=NULL, acted_at=NULL WHERE workflow_id=$1 AND step_number >= $2"
+    ).bind(*path).bind(start_step).execute(pool.get_ref()).await?;
 
     let steps = sqlx::query_as::<_, WorkflowStep>(
         "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY step_number"
@@ -317,6 +332,14 @@ pub async fn review_step(
         return Err(AppError::BadRequest("该步骤已被审核".into()));
     }
 
+    // Sequential check: all previous steps must be approved
+    let prev_unapproved: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM workflow_steps WHERE workflow_id = $1 AND step_number < $2 AND status != 'approved'"
+    ).bind(workflow_id).bind(step.step_number).fetch_one(pool.get_ref()).await?;
+    if prev_unapproved.0 > 0 {
+        return Err(AppError::BadRequest("请先完成前面的审核步骤".into()));
+    }
+
     let mut tx = pool.begin().await?;
 
     match body.action.as_str() {
@@ -364,14 +387,36 @@ pub async fn review_step(
             }
         }
         "reject" => {
-            sqlx::query(
-                "UPDATE workflow_steps SET status='rejected', comment=$1, attachment_url=$2, acted_at=NOW()
-                 WHERE id=$3"
-            ).bind(&body.comment).bind(&body.attachment_url).bind(step_id)
-            .execute(&mut *tx).await?;
+            let mode = body.reject_mode.as_deref().unwrap_or("full");
 
-            sqlx::query("UPDATE workflow_forms SET status='rejected' WHERE id=$1")
-                .bind(workflow_id).execute(&mut *tx).await?;
+            if mode == "node" {
+                // Node-level rejection: only reject current step, keep prior approvals
+                sqlx::query(
+                    "UPDATE workflow_steps SET status='rejected', comment=$1, attachment_url=$2, acted_at=NOW()
+                     WHERE id=$3"
+                ).bind(&body.comment).bind(&body.attachment_url).bind(step_id)
+                .execute(&mut *tx).await?;
+
+                sqlx::query(
+                    "UPDATE workflow_forms SET status='rejected', current_step=$1 WHERE id=$2"
+                ).bind(step.step_number).bind(workflow_id).execute(&mut *tx).await?;
+            } else {
+                // Full rejection: reset ALL steps to pending, reject entire workflow
+                sqlx::query(
+                    "UPDATE workflow_steps SET status='pending', comment=NULL, acted_at=NULL
+                     WHERE workflow_id=$1"
+                ).bind(workflow_id).execute(&mut *tx).await?;
+
+                sqlx::query(
+                    "UPDATE workflow_steps SET status='rejected', comment=$1, attachment_url=$2, acted_at=NOW()
+                     WHERE id=$3"
+                ).bind(&body.comment).bind(&body.attachment_url).bind(step_id)
+                .execute(&mut *tx).await?;
+
+                sqlx::query(
+                    "UPDATE workflow_forms SET status='rejected', current_step=1 WHERE id=$1"
+                ).bind(workflow_id).execute(&mut *tx).await?;
+            }
         }
         _ => return Err(AppError::BadRequest("action 必须是 approve 或 reject".into())),
     }
@@ -436,4 +481,68 @@ pub async fn dashboard(
         pending_workflows: pending.0,
         workflows_by_status: rows,
     })))
+}
+
+// ═══════════════════════════════════════════════════════════
+// WORKFLOW TEMPLATES
+// ═══════════════════════════════════════════════════════════
+
+pub async fn list_templates(
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let templates = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates ORDER BY name"
+    ).fetch_all(pool.get_ref()).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(templates)))
+}
+
+pub async fn create_template(
+    pool: web::Data<PgPool>,
+    body: web::Json<CreateTemplateRequest>,
+) -> Result<HttpResponse, AppError> {
+    if body.name.trim().is_empty() {
+        return Err(AppError::BadRequest("模板名称不能为空".into()));
+    }
+    if body.steps.is_empty() {
+        return Err(AppError::BadRequest("至少需要一个审核步骤".into()));
+    }
+    let steps_json = serde_json::to_value(&body.steps).unwrap_or_default();
+    let tmpl = sqlx::query_as::<_, WorkflowTemplate>(
+        "INSERT INTO workflow_templates (name, description, steps) VALUES ($1,$2,$3) RETURNING *"
+    ).bind(&body.name).bind(&body.description).bind(&steps_json)
+    .fetch_one(pool.get_ref()).await?;
+    Ok(HttpResponse::Created().json(ApiResponse::success(tmpl)))
+}
+
+pub async fn update_template(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+    body: web::Json<UpdateTemplateRequest>,
+) -> Result<HttpResponse, AppError> {
+    let ex = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1"
+    ).bind(*path).fetch_optional(pool.get_ref()).await?
+    .ok_or_else(|| AppError::NotFound("模板不存在".into()))?;
+
+    let name = body.name.as_deref().unwrap_or(&ex.name);
+    let desc = body.description.as_deref().or(ex.description.as_deref());
+    let steps_json = body.steps.as_ref()
+        .map(|s| serde_json::to_value(s).unwrap_or(ex.steps.clone()))
+        .unwrap_or_else(|| ex.steps.clone());
+
+    let tmpl = sqlx::query_as::<_, WorkflowTemplate>(
+        "UPDATE workflow_templates SET name=$1, description=$2, steps=$3 WHERE id=$4 RETURNING *"
+    ).bind(name).bind(desc).bind(&steps_json).bind(*path)
+    .fetch_one(pool.get_ref()).await?;
+    Ok(HttpResponse::Ok().json(ApiResponse::success(tmpl)))
+}
+
+pub async fn delete_template(
+    pool: web::Data<PgPool>,
+    path: web::Path<uuid::Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let rows = sqlx::query("DELETE FROM workflow_templates WHERE id = $1")
+        .bind(*path).execute(pool.get_ref()).await?.rows_affected();
+    if rows == 0 { return Err(AppError::NotFound("模板不存在".into())); }
+    Ok(HttpResponse::Ok().json(ApiResponse::<String>::message("已删除")))
 }

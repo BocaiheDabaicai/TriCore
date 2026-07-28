@@ -52,3 +52,9 @@ impl From<bcrypt::BcryptError> for AppError {
         Self::Internal(format!("Password hashing error: {err}"))
     }
 }
+
+impl From<std::io::Error> for AppError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Internal(format!("IO error: {err}"))
+    }
+}
