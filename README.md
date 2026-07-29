@@ -67,7 +67,7 @@
 |------|------|
 | Anthropic Messages API | Claude 系列模型（Sonnet/Opus/Haiku） |
 | OpenAI Chat Completions API | DeepSeek（V3/V4 Pro/V4 Flash/R1）/ GPT-4o 等 |
-| Function Calling / Tool Use | 7 个内置工具，自动查询数据库生成分析回答 |
+| Function Calling / Tool Use | 5 个通用工具（数据查询 + API 调用），支持自主数据分析与任务执行 |
 | 双格式自动适配 | 自动检测 API 类型并转换请求/响应格式 |
 | Markdown 渲染 | AI 回复自动解析为富文本（列表/代码块/表格等） |
 | 浮动面板 UI | 右下角弹出式聊天窗口，可一键放大，不遮挡操作 |
@@ -276,7 +276,7 @@ TriCore/
 |------|------|------|
 | GET | `/config` | 获取 AI 配置（API Key、模型、地址） |
 | PUT | `/config` | 更新 AI 配置 |
-| POST | `/chat` | AI 对话（Function Calling，自动调用工具查询数据库） |
+| POST | `/chat` | AI 对话（5 个 Tool Use 工具：数据库只读查询 + 后端 API 调用，支持多轮自主分析与任务执行） |
 
 ---
 
@@ -382,21 +382,23 @@ npm run dev
 
 #### 方案一：AI 对话助手 ✅ 已实现
 
-**概述**：系统内常驻 AI 对话面板，通过 **Function Calling** 直接对接数据库，用户以自然语言与系统交互。
+**概述**：系统内常驻 AI 对话面板，通过 **Tool Use / Function Calling** 直接对接数据库和后端 API，用户以自然语言与系统交互、执行业务操作。
 
 **能力示例**：
-- *「本月销售额最高的 5 个订单是哪些？」* → AI 调用 `/api/sales/orders` 查询并总结
+- *「本月销售额最高的 5 个订单是哪些？」* → AI 执行 SQL 聚合查询并总结
 - *「库存低于 50 的商品有哪些？」* → 自动查询并预警
-- *「张三还有哪些待审批的流程？」* → 查询 OA 流程并列出
-- *「最近上传的安全规范文件有哪些？」* → 查询规章制度文件
+- *「帮我创建一个客户，名称叫 XX 科技」* → AI 调用 POST /master-data/customers 执行
+- *「给这个订单关联配送司机张三」* → AI 调用 PUT /sales/orders/{id} 更新配送信息
 - *「系统整体情况怎么样？」* → 获取 Dashboard 概览统计
 
 **技术实现**：
-- 后端 `/api/ai/chat` 接口，对接 Claude API（兼容 Anthropic Messages API 格式）
-- 定义 7 个 Tool 函数映射到系统现有数据查询能力
-- 前端 AI 对话组件（聊天气泡 UI）
-- 可配置的模型选择（Claude/DeepSeek/GPT-4o）、API Key、系统提示词
-- 完整的 Tool Use 循环（最多 5 轮），AI 自动选择工具 → 查询数据库 → 分析回答
+- 后端 `/api/ai/chat` 接口，对接 Claude / DeepSeek / GPT-4o 等 API
+- 5 个通用 Tool 函数：`list_tables` / `describe_table` / `run_query`（数据库只读分析）+ `list_apis` / `call_api`（后端接口调用）
+- 前端 AI 对话组件（聊天气泡 UI，Markdown 富文本渲染）
+- 可配置的模型选择、API Key、系统提示词
+- 完整的 Tool Use 循环（最多 10 轮），AI 自主组合工具完成任务
+- SQL 安全校验（仅允许 SELECT/WITH/EXPLAIN，防注入，10s 超时，自动 LIMIT）
+- 用户 JWT 透传，所有 API 调用权限与前端一致
 
 **优势**：改动最小，不侵入现有模块，一个入口覆盖全系统。
 
@@ -467,12 +469,30 @@ npm run dev
 
 ## 更新日志
 
+### 2026-07-29
+
+#### AI 助手重大升级 — 从"只读分析"到"任务执行"
+
+- **工具系统重构**：从 7 个硬编码查询工具升级为 3 个数据库通用工具（`list_tables` / `describe_table` / `run_query`）+ 2 个 API 调用工具（`list_apis` / `call_api`），AI 可组合使用覆盖全部业务场景
+- **run_query — 动态 SQL 分析**：AI 可执行任意 SELECT 查询（JOIN / GROUP BY / 聚合 / 子查询），结果以 Markdown 表格返回；内置 SQL 安全校验（仅允许 SELECT/WITH/EXPLAIN，防多语句注入，10s 超时，自动 LIMIT 100），动态适配 PostgreSQL 全部常见列类型
+- **call_api — 后端接口调用**：AI 可调用任意后端 API 执行创建/更新/删除等写操作；通过提取用户 JWT 令牌 + 内部 HTTP 透传实现认证，权限与前端操作完全一致；禁止递归调用 `/ai/chat` 和绕过 `/auth/login`
+- **list_apis — 完整 API 目录**：内置约 60 个后端接口的完整目录（方法/路径/必填字段），AI 可根据用户意图自行查找匹配的 API
+- **任务式对话流程**：AI 收到任务后自动理解意图 → 查 API → 缺信息时主动向用户提问 → 补齐后执行 → 反馈结果，不再默默略过可选字段
+- **Tool Use 轮次上限**: 5 → 10，适配多工具组合使用场景
+- **max_tokens**: 2048 → 4096，适配更长的工具响应和对话上下文
+
+#### Bug 修复
+
+- **编辑订单 — 数量和优惠不回显**：`get_order` 返回 `{order, items}` 嵌套结构，前端 `openOrderEdit` 误当扁平对象使用导致 `id`/`discounts`/`vehicle_info` 全部为 `undefined`；修复为解构后扁平化 `{...data.order, items: data.items}`
+- **编辑订单 — final_amount 覆盖 bug**：`update_order` 存在两次 UPDATE 查询，第二步用 `existing.total_amount`（旧值）通过 COALESCE 覆盖了第一步 if-items 分支正确计算的新 final_amount；修复为合并为单次 UPDATE，if/else 两分支统一计算 total/discount/final 后一次写入
+- **AI 创建订单不关联配送信息**：`list_apis` 和系统提示词均未引导 AI 询问用户配送车辆/司机；修复为 API 目录和提示词中明确标注应主动询问
+
 ### 2026-07-28
 
 #### AI 助手
 
 - **AI 对话助手**：浮动按钮触发（右下角），弹出式聊天面板（440×520，支持一键放大至 720×680），聊天气泡 UI + 滑入动画，面板完全与页面内容叠加不遮挡操作
-- **自然语言数据查询**：基于 Function Calling 实现 7 个内置工具（订单查询 `query_orders`、商品库存 `query_products`、库存状况 `query_inventory`、审批流程 `query_workflows`、员工信息 `query_employees`、规章制度 `query_regulations`、系统概览 `get_dashboard`），AI 自动选择合适的工具调用后端查询数据库，基于最新数据生成分析回答
+- **自然语言数据查询**：基于 Function Calling 实现内置工具，AI 自动选择合适的工具调用后端查询数据库，基于最新数据生成分析回答
 - **双 API 格式兼容**：自动检测 API 类型，Anthropic Messages API（Claude/Claude Opus/Claude Haiku）和 OpenAI Chat Completions API（DeepSeek V3/V4 Pro/V4 Flash/R1/OpenAI 兼容代理）均无缝支持，Tool Use / Tool Calls 双向转换透明处理
 - **Markdown 富文本渲染**：AI 回复自动解析 Markdown 格式（粗体/列表/代码块/表格/引用/标题），用户消息保持纯文本
 - **可配置模型**：DeepSeek V4 Pro (1m)、DeepSeek V4 Flash、DeepSeek V3、DeepSeek R1、Claude Sonnet/Opus/Haiku、GPT-4o 等

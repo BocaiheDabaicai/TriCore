@@ -1,5 +1,5 @@
-use actix_web::{HttpResponse, web};
-use sqlx::PgPool;
+use actix_web::{HttpRequest, HttpResponse, web};
+use sqlx::{PgPool, Row, Column};
 
 use crate::error::AppError;
 use crate::models::ai::*;
@@ -54,180 +54,443 @@ pub async fn update_config(
 // CHAT
 // ═══════════════════════════════════════════════════════════
 
-const SYSTEM_PROMPT: &str = r#"你是 TriCore 企业系统的 AI 助手。你可以帮助用户查询和分析系统中的数据。
+const SYSTEM_PROMPT: &str = r#"你是 TriCore 企业系统的 AI 助手。你可以查询数据库进行数据分析，也可以调用后端 API 执行操作任务。
 
-可用工具：
-1. query_orders(status, keyword) - 查询销售订单
-2. query_products() - 查询商品列表
-3. query_inventory() - 查询库存状况
-4. query_workflows() - 查询审批流程
-5. query_employees() - 查询员工信息
-6. get_dashboard() - 获取系统概览统计
+## 可用工具
+1. **list_tables** — 列出数据库中所有数据表
+2. **describe_table(table_name)** — 查看指定表的列结构
+3. **run_query(sql)** — 执行只读 SELECT 查询进行数据分析
+4. **list_apis** — 列出所有可用的后端 API（含必填字段说明）
+5. **call_api(method, path, body?)** — 调用后端 API 执行操作（创建/更新/删除等）
 
-当用户询问具体数据时，请先调用相应工具获取最新数据，然后基于数据回答。
+## 任务执行流程
+当用户要求你执行操作时：
+
+1. **理解意图** — 弄清楚用户想做什么，需要哪些信息
+2. **收集信息** — 如果用户已提供所有必填信息，直接执行；如有缺失（含重要可选字段如配送信息），**直接回复询问**
+3. **执行操作** — 调用 call_api。如果不确定 API 路径或必填字段，先调用 list_apis 查看
+4. **确认结果** — 反馈执行结果。如需验证可调用 run_query
+
+避免不必要的工具调用：能一步完成的不要分两步，不确定 API 时才查 list_apis。
+
+## 数据库表概览
+销售: categories, users, products, orders, order_items, bundle_sales, bundle_items, return_orders, return_items
+OA: employees, workflow_forms, workflow_steps, workflow_archives, workflow_templates
+库存: warehouses, stock_in_records, stock_in_items, stock_out_records, stock_out_items, warehouse_inventory, issues
+主数据: customers, departments, positions, vehicles
+规章制度: regulation_categories, regulation_files
+
 回答请使用中文，简洁清晰。"#;
 
 fn build_tools() -> serde_json::Value {
     serde_json::json!([
         {
-            "name": "query_orders",
-            "description": "查询销售订单列表，可按状态(status: pending/confirmed/processing/shipped/delivered/cancelled)和关键字筛选",
+            "name": "list_tables",
+            "description": "列出数据库中所有可用的数据表",
             "input_schema": {
                 "type": "object",
-                "properties": {
-                    "status": {"type": "string", "description": "订单状态"},
-                    "keyword": {"type": "string", "description": "搜索关键字"}
-                }
+                "properties": {}
             }
         },
         {
-            "name": "query_products",
-            "description": "查询商品列表和库存",
-            "input_schema": {"type": "object", "properties": {}}
+            "name": "describe_table",
+            "description": "查看指定表的所有列信息：列名、数据类型、是否可为空、默认值",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "table_name": {
+                        "type": "string",
+                        "description": "要查看的表名"
+                    }
+                },
+                "required": ["table_name"]
+            }
         },
         {
-            "name": "query_inventory",
-            "description": "查询库存状况概览，包含各商品总库存和仓库分布",
-            "input_schema": {"type": "object", "properties": {}}
+            "name": "run_query",
+            "description": "执行只读 SELECT 查询进行数据分析。支持聚合函数(COUNT/SUM/AVG/MAX/MIN)、JOIN、GROUP BY、ORDER BY、WHERE 筛选、子查询等完整 SQL 能力。用于统计汇总、趋势分析、数据探索等场景。查询结果以 Markdown 表格返回。",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "要执行的 SELECT 查询语句。仅允许只读查询，自动追加 LIMIT 100 若无指定。"
+                    }
+                },
+                "required": ["sql"]
+            }
         },
         {
-            "name": "query_workflows",
-            "description": "查询审批流程列表",
-            "input_schema": {"type": "object", "properties": {}}
+            "name": "list_apis",
+            "description": "列出所有可用的后端 API 接口，包含 HTTP 方法、路径、描述和必填字段。在执行创建/更新/删除等操作前，先调用此工具了解有哪些接口可用。",
+            "input_schema": {
+                "type": "object",
+                "properties": {}
+            }
         },
         {
-            "name": "query_employees",
-            "description": "查询员工信息",
-            "input_schema": {"type": "object", "properties": {}}
-        },
-        {
-            "name": "query_regulations",
-            "description": "查询规章制度文件列表",
-            "input_schema": {"type": "object", "properties": {}}
-        },
-        {
-            "name": "get_dashboard",
-            "description": "获取系统概览统计：订单总数、商品数、库存预警、待审批流程等",
-            "input_schema": {"type": "object", "properties": {}}
+            "name": "call_api",
+            "description": "调用后端 API 执行操作。支持创建、更新、删除等写操作，也可用于查询。执行前确保已收集所有必填字段。",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP 方法：GET, POST, PUT, PATCH, DELETE",
+                        "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "API 路径，如 /sales/orders 或 /master-data/customers"
+                    },
+                    "body": {
+                        "type": "object",
+                        "description": "请求体（JSON 对象），POST/PUT/PATCH 时需要。仅包含 API 要求的字段。"
+                    }
+                },
+                "required": ["method", "path"]
+            }
         }
     ])
 }
 
-async fn execute_tool(name: &str, pool: &PgPool) -> String {
+fn get_api_catalog() -> String {
+    r#"## 后端 API 目录
+
+### 认证 (auth)
+| POST | /auth/login | 员工登录 | body: {employee_no, password} |
+
+### 销售 (sales)
+| POST | /sales/auth/login | 销售用户登录 | body: {username, password} |
+| GET | /sales/users | 销售用户列表 | query: role?, page?, per_page? |
+| GET | /sales/users/{id} | 获取销售用户 | |
+| POST | /sales/users | 创建销售用户 | body: {username, password, role, full_name, phone?, fingerprint_data?, face_data?, email?} |
+| PUT | /sales/users/{id} | 更新销售用户 | body: {full_name?, phone?, email?, is_active?} |
+| GET | /sales/products | 产品列表 | query: category?, page?, per_page? |
+| GET | /sales/products/{id} | 获取产品 | |
+| POST | /sales/products | 创建产品 | body: {sku, name, original_price, description?, surprise_discount_percent?, subsidized_price?, unit?, category?} |
+| PUT | /sales/products/{id} | 更新产品 | body: {name?, description?, original_price?, category?, is_active?} |
+| GET | /sales/orders | 订单列表 | query: status?, customer_id?, page?, per_page? |
+| GET | /sales/orders/{id} | 获取订单(含明细) | |
+| POST | /sales/orders | 创建订单。注意：创建前应询问用户是否需要配送，如需配送则提供 vehicle_info(车牌号) 和 driver_info(司机姓名/电话) | body: {customer_id, items:[{product_id,quantity,unit_price}], salesperson_id?, discount_amount?, vehicle_info?, driver_info?, notes?} |
+| PUT | /sales/orders/{id} | 更新订单(仅pending) | body: {customer_id?, items?, discount_amount?, notes?} |
+| PATCH | /sales/orders/{id}/status | 改订单状态 | body: {status: pending/confirmed/processing/shipped/delivered/cancelled} |
+| GET | /sales/bundles | 捆绑销售列表 | query: page?, per_page? |
+| GET | /sales/bundles/{id} | 获取捆绑销售 | |
+| POST | /sales/bundles | 创建捆绑销售 | body: {bundle_name, salesperson_id, merchant_id, bundle_price, items:[{product_id,quantity,unit_price}]} |
+| GET | /sales/returns | 退单列表 | query: page?, per_page? |
+| GET | /sales/returns/{id} | 获取退单 | |
+| POST | /sales/returns | 创建退单 | body: {order_id, salesperson_id, reason, items:[{product_id,quantity,refund_amount}]} |
+| PATCH | /sales/returns/{id}/status | 改退单状态 | body: {status: pending/approved/rejected/completed} |
+| GET | /sales/categories | 产品分类列表 | |
+| POST | /sales/categories | 创建分类 | body: {name, description?} |
+| PUT | /sales/categories/{id} | 更新分类 | body: {name?, description?, is_active?} |
+| DELETE | /sales/categories/{id} | 删除分类 | |
+| GET | /sales/dashboard | 销售仪表板 | |
+
+### OA (oa)
+| GET | /oa/employees | 员工列表 | query: department?, status?, page?, per_page? |
+| GET | /oa/employees/{id} | 获取员工 | |
+| POST | /oa/employees | 创建员工 | body: {employee_no, name, department, position, email, password, phone?, role?} |
+| PUT | /oa/employees/{id} | 更新员工 | body: {name?, department?, position?, email?, phone?, status?, role?} |
+| DELETE | /oa/employees/{id} | 删除员工 | |
+| GET | /oa/workflows | 工作流列表 | query: status?, creator_id?, page?, per_page? |
+| GET | /oa/workflows/{id} | 获取工作流 | |
+| POST | /oa/workflows | 创建工作流 | body: {title, steps:[{step_number,reviewer_id}], description?, form_data?} |
+| PUT | /oa/workflows/{id} | 更新工作流 | body: {title?, description?, form_data?} |
+| DELETE | /oa/workflows/{id} | 删除工作流 | |
+| POST | /oa/workflows/{id}/submit | 提交审批 | |
+| GET | /oa/workflows/{id}/steps | 查看审批步骤 | |
+| POST | /oa/workflows/{wf_id}/steps/{step_id}/review | 审批步骤 | body: {action: approve/reject, comment?, reject_mode?: full/node} |
+| GET | /oa/archives | 审批归档 | query: page?, per_page? |
+| GET | /oa/dashboard | OA仪表板 | |
+| GET | /oa/templates | 模板列表 | |
+| POST | /oa/templates | 创建模板 | body: {name, steps:[{step_number,reviewer_id}], description?} |
+| PUT | /oa/templates/{id} | 更新模板 | body: {name?, description?, steps?} |
+| DELETE | /oa/templates/{id} | 删除模板 | |
+
+### 库存 (inventory)
+| GET | /inventory/warehouses | 仓库列表 | |
+| POST | /inventory/warehouses | 创建仓库 | body: {name, location?, manager_id?} |
+| PUT | /inventory/warehouses/{id} | 更新仓库 | body: {name?, location?, manager_id?, is_active?} |
+| DELETE | /inventory/warehouses/{id} | 删除仓库 | |
+| GET | /inventory/warehouse-inventory/{product_id} | 各仓库存 | |
+| POST | /inventory/adjust | 调整库存 | body: {product_id, operator_id, adjustments:[{warehouse_id,quantity}], notes?} |
+| GET | /inventory/stock-in | 入库单列表 | query: status?, warehouse_id?, page?, per_page? |
+| POST | /inventory/stock-in | 创建入库单 | body: {warehouse_id, operator_id, items:[{product_id,expected_quantity,actual_quantity}], order_id?, notes?} |
+| PUT | /inventory/stock-in/{id}/verify | 盘点入库 | body: {items:[{item_id,actual_quantity}]} |
+| PUT | /inventory/stock-in/{id}/complete | 完成入库 | |
+| GET | /inventory/stock-out | 出库单列表 | query: status?, warehouse_id?, page?, per_page? |
+| POST | /inventory/stock-out | 创建出库单 | body: {warehouse_id, operator_id, items:[{product_id,quantity}], vehicle_info?, driver_info?, notes?} |
+| PUT | /inventory/stock-out/{id}/ship | 发货 | body: {vehicle_info?, driver_info?} |
+| PUT | /inventory/stock-out/{id}/deliver | 送达 | |
+| GET | /inventory/issues | 问题列表 | query: status?, severity?, page?, per_page? |
+| POST | /inventory/issues | 报告问题 | body: {related_type, related_id, description, reported_by, severity?, assigned_to?} |
+| PUT | /inventory/issues/{id} | 更新问题 | body: {description?, severity?, status?, assigned_to?} |
+| PUT | /inventory/issues/{id}/resolve | 解决问题 | body: {resolution} |
+| GET | /inventory/dashboard | 库存仪表板 | |
+
+### 主数据 (master-data)
+| GET | /master-data/customers | 客户列表 | |
+| POST | /master-data/customers | 创建客户 | body: {name, contact_person?, phone?, email?, address?, notes?} |
+| PUT | /master-data/customers/{id} | 更新客户 | body: {name?, contact_person?, phone?, email?, address?, notes?, is_active?} |
+| DELETE | /master-data/customers/{id} | 删除客户 | |
+| GET | /master-data/departments | 部门列表 | |
+| POST | /master-data/departments | 创建部门 | body: {name, description?} |
+| PUT | /master-data/departments/{id} | 更新部门 | body: {name?, description?, is_active?} |
+| DELETE | /master-data/departments/{id} | 删除部门 | |
+| GET | /master-data/positions | 职位列表 | |
+| POST | /master-data/positions | 创建职位 | body: {name, department_id?, description?} |
+| PUT | /master-data/positions/{id} | 更新职位 | body: {name?, department_id?, description?, is_active?} |
+| DELETE | /master-data/positions/{id} | 删除职位 | |
+| GET | /master-data/vehicles | 车辆列表 | |
+| POST | /master-data/vehicles | 创建车辆 | body: {plate_number, model?, capacity?, driver_name?, driver_phone?, notes?} |
+| PUT | /master-data/vehicles/{id} | 更新车辆 | body: {plate_number?, model?, driver_name?, driver_phone?, status?, notes?, is_active?} |
+| DELETE | /master-data/vehicles/{id} | 删除车辆 | |
+
+### 规章制度 (regulations)
+| GET | /regulations/categories | 分类列表 | |
+| POST | /regulations/categories | 创建分类 | body: {name} |
+| DELETE | /regulations/categories/{id} | 删除分类 | |
+| GET | /regulations/files | 文件列表 | query: title?, category_id?, page?, per_page? |
+| POST | /regulations/files | 上传文件 | multipart: title, category_id?, notes?, file |
+| PUT | /regulations/files/{id} | 更新文件信息 | body: {title?, category_id?, notes?} |
+| DELETE | /regulations/files/{id} | 删除文件 | |
+
+注意：
+- {id} 表示路径参数，用实际 UUID 替换
+- body 中带 ? 的为可选字段
+- 所有 POST/PUT 请求，body 中不带 ? 的是必填字段
+- 调用前请先确认用户已提供所有必填字段"#.to_string()
+}
+
+fn validate_sql(sql: &str) -> Result<String, String> {
+    let trimmed = sql.trim();
+    let upper = trimmed.to_uppercase();
+
+    if !upper.starts_with("SELECT") && !upper.starts_with("WITH") && !upper.starts_with("EXPLAIN") {
+        return Err("仅允许 SELECT / WITH / EXPLAIN 查询".into());
+    }
+    if !upper.contains("SELECT") {
+        return Err("查询必须包含 SELECT".into());
+    }
+
+    let stripped = trimmed.trim_end_matches(';').trim().to_string();
+    if stripped.contains(';') {
+        return Err("不允许执行多条语句".into());
+    }
+
+    if upper.contains("LIMIT") {
+        Ok(stripped)
+    } else {
+        Ok(format!("{} LIMIT 100", stripped))
+    }
+}
+
+fn cell_value(row: &sqlx::postgres::PgRow, col: &str) -> String {
+    if let Ok(v) = row.try_get::<Option<String>, _>(col) {
+        return v.unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<i64>, _>(col) {
+        return v.map(|n| n.to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<i32>, _>(col) {
+        return v.map(|n| n.to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<rust_decimal::Decimal>, _>(col) {
+        return v.map(|d| d.to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<f64>, _>(col) {
+        return v.map(|n| format!("{:.2}", n)).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<bool>, _>(col) {
+        return v.map(|b| b.to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>(col) {
+        return v.map(|d| d.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<chrono::NaiveDateTime>, _>(col) {
+        return v.map(|d| d.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<chrono::NaiveDate>, _>(col) {
+        return v.map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<uuid::Uuid>, _>(col) {
+        return v.map(|u| u.to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    if let Ok(v) = row.try_get::<Option<serde_json::Value>, _>(col) {
+        return v.map(|j| j.to_string()).unwrap_or_else(|| "NULL".into());
+    }
+    "?".into()
+}
+
+async fn call_api_internal(
+    method: &str,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    port: &str,
+    token: &str,
+) -> String {
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/api{}", port, path);
+
+    let req = match method.to_uppercase().as_str() {
+        "GET" => client.get(&url),
+        "DELETE" => client.delete(&url),
+        "POST" => {
+            let b = body.cloned().unwrap_or(serde_json::json!({}));
+            client.post(&url).json(&b)
+        }
+        "PUT" => {
+            let b = body.cloned().unwrap_or(serde_json::json!({}));
+            client.put(&url).json(&b)
+        }
+        "PATCH" => {
+            let b = body.cloned().unwrap_or(serde_json::json!({}));
+            client.patch(&url).json(&b)
+        }
+        _ => return format!("不支持的 HTTP 方法: {method}"),
+    };
+
+    match req
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            match resp.text().await {
+                Ok(text) => {
+                    let short: String = if text.len() > 2000 {
+                        format!("{}...(已截断)", &text[..2000])
+                    } else {
+                        text
+                    };
+                    format!("HTTP {} — {}", status.as_u16(), short)
+                }
+                Err(e) => format!("HTTP {} — 读取响应失败: {e}", status.as_u16()),
+            }
+        }
+        Err(e) => format!("API 调用失败: {e}"),
+    }
+}
+
+async fn execute_tool(name: &str, args: &serde_json::Value, pool: &PgPool, port: &str, token: &str) -> String {
     match name {
-        "query_orders" => {
-            match sqlx::query_as::<_, crate::models::sales::Order>(
-                "SELECT * FROM orders ORDER BY created_at DESC LIMIT 20"
+        "list_apis" => get_api_catalog(),
+        "call_api" => {
+            let method = args["method"].as_str().unwrap_or("GET");
+            let path = args["path"].as_str().unwrap_or("");
+            if path.is_empty() {
+                return "请提供 API 路径".into();
+            }
+            // Block recursive calls and login
+            if path.starts_with("/ai/chat") || path.starts_with("/auth/login") {
+                return "不允许通过 AI 调用此接口".into();
+            }
+            let body = args.get("body");
+            call_api_internal(method, path, body, port, token).await
+        }
+        "list_tables" => {
+            match sqlx::query(
+                "SELECT table_name FROM information_schema.tables \
+                 WHERE table_schema='public' AND table_type='BASE TABLE' \
+                 ORDER BY table_name"
             ).fetch_all(pool).await {
-                Ok(orders) => {
-                    let items: Vec<String> = orders.iter().map(|o|
-                        format!("订单号:{} 金额:¥{} 状态:{} 时间:{}",
-                            o.order_no, o.final_amount, o.status,
-                            o.created_at.format("%Y-%m-%d %H:%M"))
-                    ).collect();
-                    format!("最近 20 笔订单：\n{}", items.join("\n"))
+                Ok(rows) => {
+                    let tables: Vec<String> = rows.iter()
+                        .map(|r| r.get::<String, _>("table_name"))
+                        .collect();
+                    format!("数据库共有 {} 个表：\n\n{}", tables.len(),
+                        tables.iter().enumerate()
+                            .map(|(i, t)| format!("{}. {}", i + 1, t))
+                            .collect::<Vec<_>>().join("\n"))
                 }
                 Err(e) => format!("查询失败: {e}")
             }
         }
-        "query_products" => {
-            match sqlx::query_as::<_, crate::models::sales::Product>(
-                "SELECT * FROM products WHERE is_active = true ORDER BY quantity ASC"
-            ).fetch_all(pool).await {
-                Ok(prods) => {
-                    let items: Vec<String> = prods.iter().map(|p|
-                        format!("{}({}) 库存:{} 价格:¥{} 分类:{}",
-                            p.name, p.sku, p.quantity, p.original_price,
-                            p.category.as_deref().unwrap_or("无"))
-                    ).collect();
-                    format!("商品列表（按库存从少到多）：\n{}", items.join("\n"))
+        "describe_table" => {
+            let table_name = args["table_name"].as_str().unwrap_or("");
+            if table_name.is_empty() {
+                return "请指定表名".into();
+            }
+            match sqlx::query(
+                "SELECT column_name, data_type, is_nullable, \
+                 COALESCE(column_default::text, '') AS column_default \
+                 FROM information_schema.columns \
+                 WHERE table_schema='public' AND table_name=$1 \
+                 ORDER BY ordinal_position"
+            ).bind(table_name).fetch_all(pool).await {
+                Ok(rows) => {
+                    if rows.is_empty() {
+                        return format!("表 '{}' 不存在或没有列", table_name);
+                    }
+                    let mut result = format!("表 **{}** 的结构：\n\n", table_name);
+                    result.push_str("| 列名 | 类型 | 可为空 | 默认值 |\n| --- | --- | --- | --- |\n");
+                    for row in &rows {
+                        let col: String = row.get("column_name");
+                        let dt: String = row.get("data_type");
+                        let nl: String = row.get("is_nullable");
+                        let def: String = row.get("column_default");
+                        result.push_str(&format!("| {} | {} | {} | {} |\n",
+                            col, dt, nl, if def.is_empty() { "-" } else { &def }));
+                    }
+                    result
                 }
                 Err(e) => format!("查询失败: {e}")
             }
         }
-        "query_inventory" => {
-            match sqlx::query_as::<_, crate::models::sales::Product>(
-                "SELECT * FROM products WHERE is_active = true ORDER BY quantity ASC"
-            ).fetch_all(pool).await {
-                Ok(prods) => {
-                    let low: Vec<_> = prods.iter().filter(|p| p.quantity < 50).collect();
-                    let mut report = format!("总商品数: {} 种\n库存预警(<50): {} 种\n\n", prods.len(), low.len());
-                    if !low.is_empty() {
-                        report.push_str("⚠ 低库存商品：\n");
-                        for p in low {
-                            report.push_str(&format!("  - {} 仅剩 {} 件\n", p.name, p.quantity));
+        "run_query" => {
+            let sql = args["sql"].as_str().unwrap_or("");
+            if sql.is_empty() {
+                return "请提供 SQL 查询语句".into();
+            }
+            let safe_sql = match validate_sql(sql) {
+                Ok(s) => s,
+                Err(e) => return format!("SQL 校验失败: {e}"),
+            };
+
+            let _ = sqlx::query("SET LOCAL statement_timeout = '10000'").execute(pool).await;
+
+            let rows = match sqlx::query(&safe_sql).fetch_all(pool).await {
+                Ok(r) => r,
+                Err(e) => return format!("查询执行失败: {e}"),
+            };
+
+            if rows.is_empty() {
+                return "查询结果为空。".into();
+            }
+
+            let columns: Vec<String> = rows[0].columns().iter()
+                .map(|c| c.name().to_string())
+                .collect();
+
+            let mut result = format!("共 {} 行：\n\n", rows.len());
+            result.push_str("| ");
+            result.push_str(&columns.join(" | "));
+            result.push_str(" |\n|");
+            result.push_str(&columns.iter().map(|_| "---").collect::<Vec<_>>().join("|"));
+            result.push_str("|\n");
+
+            for row in &rows {
+                result.push_str("| ");
+                let vals: Vec<String> = columns.iter()
+                    .map(|col| {
+                        let v = cell_value(row, col);
+                        if v.len() > 100 {
+                            format!("{}...", &v[..97])
+                        } else {
+                            v
                         }
-                    }
-                    report.push_str("\n全部库存：\n");
-                    for p in &prods {
-                        let warn = if p.quantity < 50 { " ⚠" } else { "" };
-                        report.push_str(&format!("  {}: {} 件{}\n", p.name, p.quantity, warn));
-                    }
-                    report
-                }
-                Err(e) => format!("查询失败: {e}")
+                    })
+                    .collect();
+                result.push_str(&vals.join(" | "));
+                result.push_str(" |\n");
             }
+            result
         }
-        "query_workflows" => {
-            match sqlx::query_as::<_, crate::models::oa::WorkflowForm>(
-                "SELECT * FROM workflow_forms ORDER BY updated_at DESC LIMIT 20"
-            ).fetch_all(pool).await {
-                Ok(wfs) => {
-                    let items: Vec<String> = wfs.iter().map(|w| {
-                        let sc = match w.status.as_str() {
-                            "pending" => "待提交", "in_progress" => "审批中",
-                            "approved" => "已通过", "rejected" => "已退回", _ => &w.status
-                        };
-                        format!("{} [{}] 进度:{}/{} 时间:{}",
-                            w.title, sc,
-                            w.current_step, w.total_steps,
-                            w.created_at.format("%m-%d %H:%M"))
-                    }).collect();
-                    format!("最近 20 条审批流程：\n{}", items.join("\n"))
-                }
-                Err(e) => format!("查询失败: {e}")
-            }
-        }
-        "query_employees" => {
-            match sqlx::query_as::<_, crate::models::oa::Employee>(
-                "SELECT * FROM employees WHERE status='active' ORDER BY department, name"
-            ).fetch_all(pool).await {
-                Ok(emps) => {
-                    let items: Vec<String> = emps.iter().map(|e|
-                        format!("{}({}) {} - {} {}",
-                            e.name, e.employee_no, e.department, e.position, e.email)
-                    ).collect();
-                    format!("在职员工 {} 人：\n{}", emps.len(), items.join("\n"))
-                }
-                Err(e) => format!("查询失败: {e}")
-            }
-        }
-        "query_regulations" => {
-            match sqlx::query_as::<_, crate::models::regulation::RegulationFile>(
-                "SELECT * FROM regulation_files ORDER BY created_at DESC LIMIT 20"
-            ).fetch_all(pool).await {
-                Ok(files) => {
-                    let items: Vec<String> = files.iter().map(|f|
-                        format!("{} ({} KB) 上传:{}",
-                            f.title, f.file_size / 1024,
-                            f.created_at.format("%m-%d %H:%M"))
-                    ).collect();
-                    format!("最近 20 个文件：\n{}", items.join("\n"))
-                }
-                Err(e) => format!("查询失败: {e}")
-            }
-        }
-        "get_dashboard" => {
-            let orders: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM orders").fetch_one(pool).await.unwrap_or((0,));
-            let prods: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM products WHERE is_active=true").fetch_one(pool).await.unwrap_or((0,));
-            let low: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM products WHERE quantity<50 AND is_active=true").fetch_one(pool).await.unwrap_or((0,));
-            let wf: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM workflow_forms WHERE status='in_progress'").fetch_one(pool).await.unwrap_or((0,));
-            let emps: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM employees WHERE status='active'").fetch_one(pool).await.unwrap_or((0,));
-            let files: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM regulation_files").fetch_one(pool).await.unwrap_or((0,));
-            format!("TriCore 系统概览：\n- 销售订单: {} 笔\n- 商品种类: {} 种 (库存预警: {} 种)\n- 待审批流程: {} 个\n- 在职员工: {} 人\n- 规章制度文件: {} 份",
-                orders.0, prods.0, low.0, wf.0, emps.0, files.0)
-        }
-        _ => "未知工具".to_string()
+        _ => format!("未知工具: {name}")
     }
 }
 
@@ -254,9 +517,19 @@ fn anthropic_tools_to_openai(tools: &serde_json::Value) -> Vec<serde_json::Value
 }
 
 pub async fn chat(
+    req: HttpRequest,
     pool: web::Data<PgPool>,
+    port: web::Data<String>,
     body: web::Json<ChatRequest>,
 ) -> Result<HttpResponse, AppError> {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("")
+        .to_string();
+
     let cfg = sqlx::query_as::<_, AiConfig>("SELECT * FROM ai_configs WHERE id = 1")
         .fetch_optional(pool.get_ref()).await?
         .unwrap_or(AiConfig {
@@ -290,7 +563,7 @@ pub async fn chat(
     };
 
     // Function calling loop (max 5 tool calls)
-    let max_rounds = 5;
+    let max_rounds = 10;
     for _round in 0..max_rounds {
         let (resp_text, tool_calls) = if use_openai {
             call_openai(&client, &cfg, &api_messages, &tools).await?
@@ -314,7 +587,8 @@ pub async fn chat(
         for tc in &tool_calls {
             let tool_name = tc["name"].as_str().unwrap_or("").to_string();
             let tool_id = tc["id"].as_str().unwrap_or("").to_string();
-            let result = execute_tool(&tool_name, pool.get_ref()).await;
+            let args = &tc["input"];
+            let result = execute_tool(&tool_name, args, pool.get_ref(), port.get_ref(), &token).await;
 
             if use_openai {
                 tool_results.push(serde_json::json!({
@@ -325,7 +599,7 @@ pub async fn chat(
                 assistant_tool_calls.push(serde_json::json!({
                     "id": tool_id,
                     "type": "function",
-                    "function": { "name": tool_name, "arguments": "{}" }
+                    "function": { "name": tool_name, "arguments": serde_json::to_string(args).unwrap_or_else(|_| "{}".into()) }
                 }));
             } else {
                 tool_results.push(serde_json::json!({
@@ -376,7 +650,7 @@ async fn call_anthropic(
         .header("anthropic-version", "2023-06-01")
         .json(&serde_json::json!({
             "model": cfg.model,
-            "max_tokens": 2048,
+            "max_tokens": 4096,
             "system": system_text,
             "messages": messages,
             "tools": tools,
@@ -415,7 +689,7 @@ async fn call_openai(
         .header("Authorization", format!("Bearer {}", cfg.api_key))
         .json(&serde_json::json!({
             "model": cfg.model,
-            "max_tokens": 2048,
+            "max_tokens": 4096,
             "messages": messages,
             "tools": openai_tools,
             "tool_choice": "auto",
@@ -434,9 +708,13 @@ async fn call_openai(
 
     let tool_calls: Vec<serde_json::Value> = raw_calls.iter().map(|tc| {
         let func = &tc["function"];
+        let args: serde_json::Value = serde_json::from_str(
+            func["arguments"].as_str().unwrap_or("{}")
+        ).unwrap_or(serde_json::json!({}));
         serde_json::json!({
             "id": tc["id"],
             "name": func["name"],
+            "input": args,
         })
     }).collect();
 

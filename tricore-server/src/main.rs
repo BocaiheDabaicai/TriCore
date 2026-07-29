@@ -24,6 +24,7 @@ async fn main() -> std::io::Result<()> {
 
     let jwt_secret = cfg.jwt_secret.clone();
     let upload_dir = cfg.upload_dir.clone();
+    let server_port = cfg.server_port.to_string();
 
     HttpServer::new(move || {
         let cors = Cors::permissive();
@@ -35,6 +36,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(jwt_secret.clone()))
             .app_data(web::Data::new(upload_dir.clone()))
+            .app_data(web::Data::new(server_port.clone()))
             .configure(routes::configure)
     })
     .bind(format!("{}:{}", cfg.server_host, cfg.server_port))?

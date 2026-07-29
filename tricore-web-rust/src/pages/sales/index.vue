@@ -229,7 +229,9 @@ const openOrderCreate = () => {
   orderModal.value = true
 }
 
-const openOrderEdit = async (record: any) => {
+const openOrderEdit = async (data: any) => {
+  // get_order returns { order: {...}, items: [...] }; flatten to top-level for the form
+  const record = data.order ? { ...data.order, items: data.items } : data
   editingOrder.value = record
   // Match vehicle by plate number from the saved vehicle_info
   const savedPlate = record.vehicle_info || ''

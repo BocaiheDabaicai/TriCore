@@ -420,8 +420,11 @@ pub async fn update_order(
     let notes = body.notes.as_deref().or(existing.notes.as_deref());
     let customer = body.customer_id.unwrap_or(existing.customer_id);
 
-    // If items are being updated, rollback old inventory and recalculate
-    if let Some(ref new_items) = body.items {
+    let discounts_json = body.discounts.as_ref()
+        .and_then(|d| serde_json::to_value(d).ok());
+
+    // Calculate amounts — either from new items or from existing + discount delta
+    let (total_amount, discount_amount, final_amount) = if let Some(ref new_items) = body.items {
         if new_items.is_empty() {
             return Err(AppError::BadRequest("订单至少需要一个商品".into()));
         }
@@ -433,12 +436,10 @@ pub async fn update_order(
         for oi in &old_items {
             sqlx::query("UPDATE products SET quantity = quantity + $1 WHERE id = $2")
                 .bind(oi.quantity).bind(oi.product_id).execute(&mut *tx).await?;
-            // Restore to warehouses (distribute proportionally)
             let wis = sqlx::query_as::<_, crate::models::inventory::WarehouseInventory>(
                 "SELECT * FROM warehouse_inventory WHERE product_id = $1 ORDER BY updated_at DESC"
             ).bind(oi.product_id).fetch_all(&mut *tx).await?;
             if !wis.is_empty() {
-                // Add back to the most recently updated warehouse
                 sqlx::query(
                     "UPDATE warehouse_inventory SET quantity = quantity + $1, updated_at = NOW()
                      WHERE id = $2"
@@ -450,7 +451,7 @@ pub async fn update_order(
         sqlx::query("DELETE FROM order_items WHERE order_id = $1")
             .bind(*path).execute(&mut *tx).await?;
 
-        // Recalculate totals
+        // Recalculate totals from new items
         let new_total: f64 = new_items.iter().map(|i| i.unit_price * i.quantity as f64).sum();
         let total = rust_decimal::Decimal::try_from(new_total).unwrap_or_default();
         let discount = body.discount_amount
@@ -481,7 +482,6 @@ pub async fn update_order(
             sqlx::query("UPDATE products SET quantity = quantity - $1 WHERE id = $2")
                 .bind(item.quantity).bind(item.product_id).execute(&mut *tx).await?;
 
-            // Warehouse allocations
             if !item.allocations.is_empty() {
                 for alloc in &item.allocations {
                     sqlx::query(
@@ -493,24 +493,24 @@ pub async fn update_order(
             }
         }
 
-        let discounts_json = body.discounts.as_ref()
-            .and_then(|d| serde_json::to_value(d).ok());
-        sqlx::query(
-            "UPDATE orders SET total_amount=$1, discount_amount=$2, final_amount=$3, discounts=$4 WHERE id=$5"
-        ).bind(total).bind(discount).bind(final_amt).bind(&discounts_json).bind(*path)
-        .execute(&mut *tx).await?;
-    }
+        (total, discount, final_amt)
+    } else {
+        // No item change: keep existing total, apply discount delta from body
+        let discount_val = body.discount_amount
+            .map(|v| rust_decimal::Decimal::try_from(v).unwrap_or_default())
+            .unwrap_or(existing.discount_amount);
+        let final_val = existing.total_amount - discount_val;
+        (existing.total_amount, discount_val, final_val)
+    };
 
-    let discount = body.discount_amount
-        .map(|v| rust_decimal::Decimal::try_from(v).unwrap_or_default());
-
-    let discounts_json = body.discounts.as_ref()
-        .and_then(|d| serde_json::to_value(d).ok());
-    let final_amt = discount.map(|d| existing.total_amount - d);
-
+    // Single UPDATE — amounts are always correctly computed above
     let order = sqlx::query_as::<_, Order>(
-        "UPDATE orders SET customer_id=$1, vehicle_info=$2, driver_info=$3, notes=$4, discounts=COALESCE($5, orders.discounts), discount_amount=COALESCE($6, orders.discount_amount), final_amount=COALESCE($7, orders.final_amount) WHERE id=$8 RETURNING *"
-    ).bind(customer).bind(vehicle).bind(driver).bind(notes).bind(&discounts_json).bind(discount).bind(final_amt).bind(*path)
+        "UPDATE orders SET customer_id=$1, vehicle_info=$2, driver_info=$3, notes=$4,
+         total_amount=$5, discount_amount=$6, final_amount=$7,
+         discounts=COALESCE($8, orders.discounts) WHERE id=$9 RETURNING *"
+    ).bind(customer).bind(vehicle).bind(driver).bind(notes)
+     .bind(total_amount).bind(discount_amount).bind(final_amount)
+     .bind(&discounts_json).bind(*path)
     .fetch_one(&mut *tx).await?;
 
     tx.commit().await?;
