@@ -323,6 +323,30 @@ pub async fn run_migrations(pool: &PgPool) {
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )",
+
+        // ── MCP ──
+        "CREATE TABLE IF NOT EXISTS mcp_servers (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(200) NOT NULL,
+            transport VARCHAR(20) NOT NULL DEFAULT 'stdio',
+            command VARCHAR(500),
+            args TEXT,
+            url VARCHAR(500),
+            is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+
+        // ── DATA SNAPSHOTS ──
+        "CREATE TABLE IF NOT EXISTS data_snapshots (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            snapshot_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            table_count INTEGER NOT NULL DEFAULT 0,
+            status VARCHAR(20) NOT NULL DEFAULT 'in_progress',
+            notes TEXT,
+            snapshot_data JSONB NOT NULL DEFAULT '{}',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
     ];
 
     let table_count = sqls.len();

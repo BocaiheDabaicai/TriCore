@@ -2,7 +2,7 @@
 import { ref, onMounted, h } from 'vue'
 import { Table, Tag, Button, Modal, Input, Select, message, Spin, Space, Upload } from 'ant-design-vue'
 import { PlusOutlined, EyeOutlined, DeleteOutlined, UploadOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
-import { regulationsAPI } from '@/services/api'
+import { regulationsAPI } from '@/services/regulations'
 import axios from 'axios'
 
 const loading = ref(true)

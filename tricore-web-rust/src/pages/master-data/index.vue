@@ -3,7 +3,9 @@ import { ref, onMounted, h, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Table, Tag, Button, Modal, Input, Select, message, Spin, Tabs, Space } from 'ant-design-vue'
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons-vue'
-import { masterDataAPI, oaAPI, inventoryAPI } from '@/services/api'
+import { masterDataAPI } from '@/services/master-data'
+import { oaAPI } from '@/services/oa'
+import { inventoryAPI } from '@/services/inventory'
 
 const route = useRoute()
 const router = useRouter()

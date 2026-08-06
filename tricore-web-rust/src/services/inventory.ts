@@ -1,0 +1,28 @@
+import api from './http'
+
+export const inventoryAPI = {
+  listWarehouses: () => api.get('/inventory/warehouses'),
+  getWarehouse: (id: string) => api.get(`/inventory/warehouses/${id}`),
+  createWarehouse: (data: Record<string, unknown>) => api.post('/inventory/warehouses', data),
+  updateWarehouse: (id: string, data: Record<string, unknown>) => api.put(`/inventory/warehouses/${id}`, data),
+  deleteWarehouse: (id: string) => api.delete(`/inventory/warehouses/${id}`),
+  listStockIn: (params?: Record<string, unknown>) => api.get('/inventory/stock-in', { params }),
+  getStockIn: (id: string) => api.get(`/inventory/stock-in/${id}`),
+  createStockIn: (data: Record<string, unknown>) => api.post('/inventory/stock-in', data),
+  verifyStockIn: (id: string, data: Record<string, unknown>) => api.put(`/inventory/stock-in/${id}/verify`, data),
+  completeStockIn: (id: string) => api.put(`/inventory/stock-in/${id}/complete`),
+  listStockOut: (params?: Record<string, unknown>) => api.get('/inventory/stock-out', { params }),
+  getStockOut: (id: string) => api.get(`/inventory/stock-out/${id}`),
+  createStockOut: (data: Record<string, unknown>) => api.post('/inventory/stock-out', data),
+  shipStockOut: (id: string, data: Record<string, unknown>) => api.put(`/inventory/stock-out/${id}/ship`, data),
+  deliverStockOut: (id: string) => api.put(`/inventory/stock-out/${id}/deliver`),
+  listIssues: (params?: Record<string, unknown>) => api.get('/inventory/issues', { params }),
+  getIssue: (id: string) => api.get(`/inventory/issues/${id}`),
+  createIssue: (data: Record<string, unknown>) => api.post('/inventory/issues', data),
+  updateIssue: (id: string, data: Record<string, unknown>) => api.put(`/inventory/issues/${id}`, data),
+  resolveIssue: (id: string, data: { resolution: string }) => api.put(`/inventory/issues/${id}/resolve`, data),
+  listProducts: () => api.get('/inventory/products'),
+  getDashboard: () => api.get('/inventory/dashboard'),
+  getWarehouseInventory: (productId: string) => api.get(`/inventory/warehouse-inventory/${productId}`),
+  adjustInventory: (data: Record<string, unknown>) => api.post('/inventory/adjust', data),
+}

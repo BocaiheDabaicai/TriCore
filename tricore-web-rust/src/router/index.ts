@@ -14,6 +14,12 @@ const router = createRouter({
       meta: { title: '登录', public: true },
     },
     {
+      path: '/ai/chat',
+      name: 'AiChat',
+      component: () => import('@/pages/ai/chat.vue'),
+      meta: { title: 'AI 对话' },
+    },
+    {
       path: '/',
       component: MainLayout,
       redirect: '/dashboard',
@@ -89,6 +95,18 @@ const router = createRouter({
           name: 'AiConfig',
           component: () => import('@/pages/ai/config.vue'),
           meta: { title: 'AI 配置' },
+        },
+        {
+          path: 'ai/mcp',
+          name: 'AiMcp',
+          component: () => import('@/pages/ai/mcp.vue'),
+          meta: { title: 'MCP 服务' },
+        },
+        {
+          path: 'data-snapshots',
+          name: 'DataSnapshots',
+          component: () => import('@/pages/data-snapshots/index.vue'),
+          meta: { title: '数据快照' },
         },
       ],
     },

@@ -6,7 +6,7 @@ import {
   AuditOutlined, EditOutlined, ReloadOutlined, DeleteOutlined,
   UpOutlined, DownOutlined, CloseOutlined, BlockOutlined, CopyOutlined,
 } from '@ant-design/icons-vue'
-import { oaAPI } from '@/services/api'
+import { oaAPI } from '@/services/oa'
 
 const loading = ref(true)
 const employees = ref<any[]>([])

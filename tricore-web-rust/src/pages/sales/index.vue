@@ -2,7 +2,9 @@
 import { ref, onMounted, h, computed } from 'vue'
 import { Table, Tag, Button, Modal, Input, InputNumber, Select, message, Spin, Tabs, Space } from 'ant-design-vue'
 import { PlusOutlined, EyeOutlined, DeleteOutlined, ShoppingCartOutlined, CheckCircleOutlined } from '@ant-design/icons-vue'
-import { salesAPI, masterDataAPI, inventoryAPI } from '@/services/api'
+import { salesAPI } from '@/services/sales'
+import { masterDataAPI } from '@/services/master-data'
+import { inventoryAPI } from '@/services/inventory'
 
 const loading = ref(true)
 const products = ref<any[]>([])

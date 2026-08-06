@@ -18,6 +18,7 @@ import {
   SafetyCertificateOutlined,
   SettingOutlined,
   RobotOutlined,
+  HistoryOutlined,
   LogoutOutlined,
 } from '@ant-design/icons-vue'
 import AiFloatingChat from '@/components/AiFloatingChat.vue'
@@ -60,10 +61,12 @@ const menuItems = [
   { key: '/oa',       icon: () => h(AuditOutlined), label: '办公协同' },
   { key: '/inventory', icon: () => h(DatabaseOutlined), label: '库存管理' },
   { key: '/regulations', icon: () => h(FileTextOutlined), label: '规章制度' },
+  { key: '/data-snapshots', icon: () => h(HistoryOutlined), label: '数据快照' },
   {
     key: 'ai', icon: () => h(RobotOutlined), label: 'AI管理',
     children: [
       { key: '/ai/config', label: 'AI 配置' },
+      { key: '/ai/mcp', label: 'MCP 服务' },
     ],
   },
   {

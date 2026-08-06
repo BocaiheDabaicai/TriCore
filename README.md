@@ -97,49 +97,42 @@ TriCore/
 │   │   ├── layouts/MainLayout.vue     # 侧边栏菜单 + 顶栏用户信息
 │   │   ├── pages/
 │   │   │   ├── login/                 # 登录页（JWT 认证）
-│   │   │   ├── dashboard/             # 工作台（统计卡片 + 模块概览）
+│   │   │   ├── dashboard/             # 工作台（统计卡片 + 图表 + 快捷入口）
 │   │   │   ├── sales/                 # 销售管理（订单 + 商品 + 分类）
 │   │   │   ├── oa/                    # 办公协同（审批 + 员工）
 │   │   │   ├── inventory/            # 库存管理（库存调整 + 出入库 + 问题追踪）
 │   │   │   ├── regulations/          # 规章制度（文件上传 + 分类管理）
-│   │   │   ├── ai/                   # AI 管理（配置 + 对话助手）
-│   │   │   └── master-data/          # 基础数据（客户 + 部门 + 职位 + 车辆 + 用户 + 仓库）
+│   │   │   ├── ai/                   # AI 管理（配置 + MCP + 对话）
+│   │   │   ├── master-data/          # 基础数据（客户 + 部门 + 职位 + 车辆 + 用户 + 仓库）
+│   │   │   └── data-snapshots/       # 数据快照（自动备份 + 恢复）
 │   │   ├── stores/                    # Pinia 状态管理
-│   │   │   ├── auth.ts               # 认证 Store（登录/登出/Token）
-│   │   │   ├── inventory.ts
-│   │   │   ├── oa.ts
-│   │   │   └── sales.ts
+│   │   │   ├── auth.ts / inventory.ts / oa.ts / sales.ts
 │   │   ├── components/                # 公共组件
-│   │   │   └── AiFloatingChat.vue     # AI 浮动对话面板
+│   │   │   └── AiFloatingChat.vue     # AI 浮动对话面板（SSE 实时推理）
+│   │   ├── services/                  # API 层（按模块拆分）
+│   │   │   ├── http.ts               # Axios 实例 + JWT 拦截器
+│   │   │   ├── auth.ts / sales.ts / oa.ts / inventory.ts
+│   │   │   ├── regulations.ts / master-data.ts / ai.ts
+│   │   │   └── data-snapshots.ts
 │   │   ├── router/index.ts           # 路由配置 + beforeEach 认证守卫
-│   │   ├── services/api.ts           # API 层 + JWT 拦截器
 │   │   └── styles/global.css         # 全局样式 + Ant Design 主题覆盖
 │   ├── rsbuild.config.ts
 │   └── postcss.config.mjs
 └── tricore-server/                    # Rust 后端
     ├── src/
-    │   ├── routes/
-    │   │   ├── ai.rs                    # AI 对话 + 配置
-    │   │   ├── auth.rs                # 认证路由（登录/当前用户）
-    │   │   ├── sales.rs               # 销售 + 商品分类
-    │   │   ├── oa.rs
-    │   │   ├── inventory.rs
-    │   │   ├── regulation.rs          # 规章制度（文件管理）
-    │   │   └── master_data.rs
-    │   ├── handlers/                  # 请求处理器
-    │   │   ├── ai.rs                  # AI 对话 + 配置
-    │   │   ├── regulation.rs          # 规章制度（文件管理）
-    │   │   └── ...
-    │   ├── models/                    # 数据模型 + DTO
-    │   │   ├── ai.rs                  # AI 配置 + 对话
-    │   │   ├── regulation.rs          # 规章制度
-    │   │   └── ...
+    │   ├── modules/                    # 业务模块（按领域组织）
+    │   │   ├── ai/                     #   models.rs + handlers.rs + routes.rs
+    │   │   ├── auth/                   #   认证模块
+    │   │   ├── sales/ / oa/ / inventory/
+    │   │   ├── master_data/ / regulation/
+    │   │   ├── data_snapshot/          #   数据快照
+    │   │   └── mcp/                    #   MCP 客户端
     │   ├── auth.rs                    # JWT 创建/验证 + 全局认证中间件
     │   ├── db.rs                      # 连接池 + 全量表自动创建 + 增量升级 + 种子数据
+    │   ├── dto.rs                     # 共享 DTO（ApiResponse / PaginationParams）
     │   ├── error.rs                   # 统一错误处理（含 401）
-    │   ├── config.rs                  # 环境变量（含 JWT_SECRET）
-    │   └── main.rs                    # 入口（挂载认证中间件）
-    ├── migrations/                    # SQL 迁移文件（参考用）
+    │   ├── config.rs                  # 环境变量 + 快照间隔配置
+    │   └── main.rs                    # 入口 + 后台任务（快照 / MCP 刷新）
     ├── .env
     └── Cargo.toml
 ```
@@ -174,6 +167,8 @@ TriCore/
 | `regulation_files` | Regulations | 规章制度文件 |
 | `workflow_templates` | OA | 流程架构模板（steps JSONB） |
 | `ai_configs` | AI | AI 配置（单行，CHECK id=1） |
+| `mcp_servers` | AI | MCP 外部服务连接配置 |
+| `data_snapshots` | 系统 | 数据库快照（定时备份，JSONB 存储，最多 12 条） |
 
 > 注：`orders` 表通过 `ALTER TABLE ADD COLUMN IF NOT EXISTS` 增量新增了 `discounts JSONB` 列（折扣明细持久化）；`order_items` 表新增了 `warehouse_allocations JSONB` 列（仓库分配数据）。
 
@@ -276,7 +271,27 @@ TriCore/
 |------|------|------|
 | GET | `/config` | 获取 AI 配置（API Key、模型、地址） |
 | PUT | `/config` | 更新 AI 配置 |
-| POST | `/chat` | AI 对话（5 个 Tool Use 工具：数据库只读查询 + 后端 API 调用，支持多轮自主分析与任务执行） |
+| POST | `/chat` | AI 对话（5 个内置工具 + MCP 外部工具，支持流式 SSE 响应：`{"stream":true}`，多轮自主分析与任务执行） |
+
+### MCP — `/api/mcp`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/servers` | MCP 服务列表 |
+| POST | `/servers` | 添加 MCP 服务（stdio/SSE） |
+| PUT | `/servers/{id}` | 编辑 MCP 服务 |
+| DELETE | `/servers/{id}` | 删除 MCP 服务 |
+| GET | `/tools` | 查看已发现的 MCP 工具 |
+| POST | `/refresh` | 刷新 MCP 工具列表 |
+
+### Data Snapshots — `/api/data-snapshots`
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/data-snapshots` | 快照列表（元数据） |
+| POST | `/data-snapshots` | 手动创建快照 |
+| POST | `/data-snapshots/{id}/restore` | 恢复快照（需 `{confirm:true}`） |
+| DELETE | `/data-snapshots/{id}` | 删除快照 |
 
 ---
 
@@ -468,6 +483,42 @@ npm run dev
 ---
 
 ## 更新日志
+
+### 2026-08-06
+
+#### 项目架构重构 — 模块化
+
+- **后端重组**：旧 `models/` + `handlers/` + `routes/` 三层平铺结构 → `modules/{domain}/` 领域模块，每个模块内含 `models.rs` + `handlers.rs` + `routes.rs`，相关代码内聚，维护路径清晰
+- **共享提取**：`dto.rs`（ApiResponse / PaginationParams）提取到 `src/` 根目录，跨模块引用统一为 `crate::dto::`
+- **前端 API 分层**：旧单体 `services/api.ts`（190 行）拆分为 `http.ts`（Axios 实例 + 拦截器）+ 8 个领域文件（auth / sales / oa / inventory / regulations / master-data / ai / data-snapshots），按左侧菜单对应归类
+
+#### 数据快照系统
+
+- **自动定时备份**：后端 `data_snapshots` 表，每次备份完整保存 27 张业务表数据为 JSONB，含时间戳，后台 tokio 任务按 `SNAPSHOT_INTERVAL_SECS`（默认 3600s）自动执行
+- **12 条上限**：超出时自动清除最旧记录，FIFO 策略
+- **一键恢复**：前端快照管理页（`/data-snapshots`），支持查看、手动创建、恢复（事务内按 FK 依赖顺序删除+重插）、删除
+- **安全机制**：`ai_configs`（含 API Key）排除不备份；恢复需 `confirm: true` 确认
+
+#### AI 助手增强
+
+- **推理过程实时展示**：后端 SSE 流式推送 → 前端 ReadableStream 逐条消费，工具调用（查数据库/调 API）在分析过程中逐个出现，分析过程默认展开并排在最终回复上方
+- **推理内容返回**：非流式模式下 `ChatResponse` 新增 `reasoning` 字段，包含每步工具调用的名称、参数、结果
+- **API 错误处理**：`call_anthropic` / `call_openai` 增加 HTTP 状态码检查，4xx/5xx 返回真实错误信息而非误导性「空响应」
+- **表名纠错**：系统提示词强化实际表名说明 + `run_query` 错误信息引导调用 `list_tables` 修正，避免 AI 编造不存在的表名导致循环卡死
+- **全屏独立对话页**：`/ai/chat` 为顶层独立路由（脱离 MainLayout），`position:fixed` 全视口布局，浮动面板通过「新窗口」按钮打开
+
+#### MCP 集成框架
+
+- **MCP Client**：新增 `modules/mcp/` 模块，支持 stdio（本地子进程 JSON-RPC）和 SSE（远程 HTTP）两种传输方式连接外部 MCP Server
+- **AI 工具扩展**：`build_tools()` 动态追加 MCP 工具（`mcp:` 前缀），`execute_tool()` 自动路由到 `client::call_tool()`；服务启动时自动刷新
+- **前端管理**：`/ai/mcp` 独立页面，服务列表（名称/传输/启停/编辑删除）+ 工具发现展示
+- **数据库**：新增 `mcp_servers` 表
+
+#### 前端优化
+
+- AI 管理页拆分为「AI 配置」和「MCP 服务」两个独立子页面（侧边栏 AI 管理下子菜单）
+- 全屏对话框滚动修复：移除 Spin 包裹导致的 flex 布局链断裂
+- Tailwind 样式改为内联 style 避免与 Ant Design 组件冲突
 
 ### 2026-07-29
 

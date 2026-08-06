@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { oaAPI } from '@/services/api'
+import { oaAPI } from '@/services/oa'
 
 export const useOAStore = defineStore('oa', () => {
   const employees = ref<any[]>([])

@@ -7,7 +7,10 @@ import {
   AuditOutlined, DatabaseOutlined, SettingOutlined,
   RobotOutlined, ArrowUpOutlined, RightOutlined,
 } from '@ant-design/icons-vue'
-import { salesAPI, oaAPI, inventoryAPI, regulationsAPI } from '@/services/api'
+import { salesAPI } from '@/services/sales'
+import { oaAPI } from '@/services/oa'
+import { inventoryAPI } from '@/services/inventory'
+import { regulationsAPI } from '@/services/regulations'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 

@@ -4,6 +4,7 @@ pub struct Config {
     pub server_port: u16,
     pub jwt_secret: String,
     pub upload_dir: String,
+    pub snapshot_interval_secs: u64,
 }
 
 impl Config {
@@ -21,6 +22,10 @@ impl Config {
                 .unwrap_or_else(|_| "tricore-dev-secret-2026".into()),
             upload_dir: std::env::var("UPLOAD_DIR")
                 .unwrap_or_else(|_| "./uploads".into()),
+            snapshot_interval_secs: std::env::var("SNAPSHOT_INTERVAL_SECS")
+                .unwrap_or_else(|_| "3600".into())
+                .parse()
+                .unwrap_or(3600),
         }
     }
 }
