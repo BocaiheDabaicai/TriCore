@@ -16,12 +16,33 @@ def get_db():
         db.close()
 
 
+# ---- 请求体模型 ----
+
 class GuideRequest(BaseModel):
     description: str
     need_steps: bool = False
 
 
-# ---- 接口 ----
+class TemplateCreate(BaseModel):
+    """创建模板时提交的数据"""
+    name: str
+    description: str
+
+
+class TemplateUpdate(BaseModel):
+    """更新模板 —— 传哪个改哪个"""
+    name: str | None = None
+    description: str | None = None
+
+
+class StepCreate(BaseModel):
+    """添加步骤时提交的数据"""
+    order: int
+    name: str
+    role: str
+
+
+# ---- 查 ----
 
 @router.get("/templates")
 def list_templates(keyword: str = Query(default=""), db: Session = Depends(get_db)):
@@ -61,10 +82,11 @@ def get_template(template_id: int, db: Session = Depends(get_db)):
     }
 
 
+# ---- 增 ----
+
 @router.post("/templates/create")
-def create_template(name: str, description: str, db: Session = Depends(get_db)):
-    """创建流程模板（步骤后续用专门接口添加）"""
-    template = WorkflowTemplate(name=name, description=description)
+def create_template(req: TemplateCreate, db: Session = Depends(get_db)):
+    template = WorkflowTemplate(name=req.name, description=req.description)
     db.add(template)
     db.commit()
     db.refresh(template)
@@ -72,18 +94,66 @@ def create_template(name: str, description: str, db: Session = Depends(get_db)):
 
 
 @router.post("/templates/{template_id}/steps")
-def add_step(template_id: int, order: int, name: str, role: str, db: Session = Depends(get_db)):
+def add_step(template_id: int, req: StepCreate, db: Session = Depends(get_db)):
     """给指定模板添加一个步骤"""
-    step = WorkflowStep(order=order, name=name, role=role, template_id=template_id)
+    # 先确认模板存在，防止给不存在的模板挂步骤
+    template = db.query(WorkflowTemplate).filter(WorkflowTemplate.id == template_id).first()
+    if not template:
+        return {"message": "模板不存在", "data": None}
+
+    step = WorkflowStep(order=req.order, name=req.name, role=req.role, template_id=template_id)
     db.add(step)
     db.commit()
     db.refresh(step)
     return {"message": "步骤添加成功", "data": {"id": step.id, "order": step.order, "name": step.name}}
 
 
+# ---- 改 ----
+
+@router.put("/templates/{template_id}")
+def update_template(template_id: int, req: TemplateUpdate, db: Session = Depends(get_db)):
+    t = db.query(WorkflowTemplate).filter(WorkflowTemplate.id == template_id).first()
+    if not t:
+        return {"message": "模板不存在", "data": None}
+
+    if req.name is not None:
+        t.name = req.name
+    if req.description is not None:
+        t.description = req.description
+
+    db.commit()
+    db.refresh(t)
+    return {"message": "更新成功", "data": {"id": t.id, "name": t.name}}
+
+
+# ---- 删 ----
+
+@router.delete("/templates/{template_id}")
+def delete_template(template_id: int, db: Session = Depends(get_db)):
+    """
+    删除模板 —— 【新概念】级联删除
+    步骤表的外键指向模板，模板没了步骤就成了"孤儿数据"
+    所以删除模板前，必须先把它的步骤全部删掉
+    """
+    t = db.query(WorkflowTemplate).filter(WorkflowTemplate.id == template_id).first()
+    if not t:
+        return {"message": "模板不存在", "data": None}
+
+    # 1. 先删所有步骤
+    steps = db.query(WorkflowStep).filter(WorkflowStep.template_id == template_id).all()
+    for s in steps:
+        db.delete(s)
+
+    # 2. 再删模板本身
+    db.delete(t)
+    db.commit()
+    return {"message": "删除成功", "data": {"id": template_id}}
+
+
+# ---- 流程引导 ----
+
 @router.post("/guide")
 def guide_workflow(req: GuideRequest, db: Session = Depends(get_db)):
-    """流程引导：根据描述匹配模板"""
     templates = db.query(WorkflowTemplate).all()
     matched = [t for t in templates if any(word in t.name for word in req.description)]
 
