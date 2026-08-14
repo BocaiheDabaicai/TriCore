@@ -1,0 +1,17 @@
+# 密钥配置 —— 绝对不能提交到 git
+.env
+
+# Python 缓存/编译产物
+__pycache__/
+*.pyc
+
+# 本地数据库文件（数据可以随时重建）
+kb_agent.db
+
+# 虚拟环境
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/

@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from core.database import SessionLocal
 from models.workflow import WorkflowTemplate, WorkflowStep
+from services.llm_service import is_configured, pick_template
 
 router = APIRouter(prefix="/api/v1/workflow", tags=["流程助手"])
 
@@ -155,21 +156,40 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
 @router.post("/guide")
 def guide_workflow(req: GuideRequest, db: Session = Depends(get_db)):
     templates = db.query(WorkflowTemplate).all()
-    matched = [t for t in templates if any(word in t.name for word in req.description)]
 
-    if not matched:
-        return {
-            "message": "未找到匹配的流程模板，请联系管理员配置。",
-            "suggestion": "试试输入：请假、采购、报销",
-        }
+    if is_configured():
+        # LLM 路线：把所有模板发给模型，让它挑一个，只返回模板名
+        context = "\n\n".join(
+            f"{t.name}：{t.description}" for t in templates
+        )
+        picked_name = pick_template(req.description, context)
+
+        # 拿 LLM 返回的名字，回数据库找完整的模板对象
+        # 步骤等详细信息必须来自数据库，不能让 LLM 编
+        chosen = next((t for t in templates if t.name == picked_name), None)
+
+        if chosen is None:
+            return {
+                "message": "未找到匹配的流程模板，请联系管理员配置。",
+                "suggestion": "试试输入：请假、采购、报销",
+            }
+    else:
+        # 降级路线：关键字匹配
+        matched = [t for t in templates if any(word in t.name for word in req.description)]
+        if not matched:
+            return {
+                "message": "未找到匹配的流程模板，请联系管理员配置。",
+                "suggestion": "试试输入：请假、采购、报销",
+            }
+        chosen = matched[0]
 
     result = {
         "description": req.description,
-        "recommend": matched[0].name,
-        "detail": matched[0].description,
+        "recommend": chosen.name,
+        "detail": chosen.description,
     }
 
     if req.need_steps:
-        result["steps"] = [{"order": s.order, "name": s.name, "role": s.role} for s in matched[0].steps]
+        result["steps"] = [{"order": s.order, "name": s.name, "role": s.role} for s in chosen.steps]
 
     return result
