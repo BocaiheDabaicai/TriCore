@@ -4,9 +4,9 @@ from pydantic import BaseModel
 
 from core.database import SessionLocal
 from models.policy import Policy
-from services.llm_service import is_configured, chat_with_context
+from services.embedding_service import sync_vector, delete_vector
 
-router = APIRouter(prefix="/api/v1/policy", tags=["制度查询"])
+router = APIRouter(prefix="/api/v1/policy", tags=["制度管理"])
 
 
 def get_db():
@@ -31,11 +31,6 @@ class PolicyUpdate(BaseModel):
     title: str | None = None
     category: str | None = None
     content: str | None = None
-
-
-class PolicyAsk(BaseModel):
-    """制度问答请求"""
-    question: str
 
 
 # ---- 查 ----
@@ -85,6 +80,10 @@ def create_policy(req: PolicyCreate, db: Session = Depends(get_db)):
     db.add(new_policy)
     db.commit()
     db.refresh(new_policy)
+
+    # 同步向量索引：不调这行，新制度要等手动 /reindex 才能被检索到
+    sync_vector(db, "policy", new_policy.id, new_policy.title, new_policy.content)
+
     return {"message": "创建成功", "data": {"id": new_policy.id, "title": new_policy.title}}
 
 
@@ -111,6 +110,10 @@ def update_policy(policy_id: int, req: PolicyUpdate, db: Session = Depends(get_d
 
     db.commit()
     db.refresh(p)
+
+    # 内容变了，向量也要跟着更新，否则检索到的还是旧内容
+    sync_vector(db, "policy", p.id, p.title, p.content)
+
     return {"message": "更新成功", "data": {"id": p.id, "title": p.title, "category": p.category}}
 
 
@@ -128,46 +131,8 @@ def delete_policy(policy_id: int, db: Session = Depends(get_db)):
 
     db.delete(p)
     db.commit()
+
+    # 制度删了，索引里的向量也要删，否则会检索到"幽灵数据"
+    delete_vector(db, "policy", policy_id)
+
     return {"message": "删除成功", "data": {"id": policy_id}}
-
-
-# ---- 问答 ----
-
-@router.post("/ask")
-def ask_policy(req: PolicyAsk, db: Session = Depends(get_db)):
-    """制度问答 —— 和文档问答一样的 RAG 模式"""
-    policies = db.query(Policy).all()
-
-    # 第一步：检索（关键字匹配找相关制度）
-    matched = []
-    for p in policies:
-        for word in req.question:
-            if word in p.title or word in p.content:
-                matched.append(p)
-                break
-
-    if not matched:
-        return {
-            "question": req.question,
-            "answer": "未找到相关制度，请换个问题试试。",
-            "sources": [],
-        }
-
-    # 第二三步：增强 + 生成
-    context = "\n\n".join(
-        f"【{p.title}】{p.content}" for p in matched[:3]
-    )
-
-    if is_configured():
-        answer = chat_with_context(req.question, context)
-        answer_source = "LLM"
-    else:
-        answer = f"根据制度「{matched[0].title}」：{matched[0].content}"
-        answer_source = "keyword"
-
-    return {
-        "question": req.question,
-        "answer": answer,
-        "answer_source": answer_source,
-        "sources": [{"id": p.id, "title": p.title} for p in matched],
-    }

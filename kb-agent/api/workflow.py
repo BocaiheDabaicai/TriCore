@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from core.database import SessionLocal
 from models.workflow import WorkflowTemplate, WorkflowStep
 from services.llm_service import is_configured, pick_template
+from services.embedding_service import sync_template_vector, delete_vector
 
 router = APIRouter(prefix="/api/v1/workflow", tags=["流程助手"])
 
@@ -91,6 +92,10 @@ def create_template(req: TemplateCreate, db: Session = Depends(get_db)):
     db.add(template)
     db.commit()
     db.refresh(template)
+
+    # 同步向量索引（新模板还没有步骤，向量内容 = 描述）
+    sync_template_vector(db, template)
+
     return {"message": "创建成功", "data": {"id": template.id, "name": template.name}}
 
 
@@ -106,6 +111,12 @@ def add_step(template_id: int, req: StepCreate, db: Session = Depends(get_db)):
     db.add(step)
     db.commit()
     db.refresh(step)
+
+    # 模板向量里包含步骤串，步骤变了向量也要重新算
+    # commit 后 SQLAlchemy 默认会把对象"过期"，此时访问 template.steps 会自动重新查库，
+    # 拿到包含新步骤的完整列表，不用手动重新查询
+    sync_template_vector(db, template)
+
     return {"message": "步骤添加成功", "data": {"id": step.id, "order": step.order, "name": step.name}}
 
 
@@ -124,6 +135,10 @@ def update_template(template_id: int, req: TemplateUpdate, db: Session = Depends
 
     db.commit()
     db.refresh(t)
+
+    # 描述/名称变了，向量同步更新
+    sync_template_vector(db, t)
+
     return {"message": "更新成功", "data": {"id": t.id, "name": t.name}}
 
 
@@ -148,6 +163,10 @@ def delete_template(template_id: int, db: Session = Depends(get_db)):
     # 2. 再删模板本身
     db.delete(t)
     db.commit()
+
+    # 3. 删掉索引里的模板向量，防止检索到已删除的流程
+    delete_vector(db, "workflow", template_id)
+
     return {"message": "删除成功", "data": {"id": template_id}}
 
 

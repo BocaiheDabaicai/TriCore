@@ -100,11 +100,20 @@ def chat(req: ChatRequest, db: Session = Depends(get_db)):
     db.add(Message(session_id=session_id, role="assistant", content=answer))
     db.commit()
 
+    # 同一条知识可能命中多个块，sources 按 (type, id) 去重，避免来源列表重复
+    seen = set()
+    sources = []
+    for m in matched:
+        key = (m["type"], m["id"])
+        if key not in seen:
+            seen.add(key)
+            sources.append({"type": m["type"], "id": m["id"], "title": m["title"]})
+
     return {
         "question": req.question,
         "answer": answer,
         "answer_source": answer_source,
         "retrieval_method": retrieval_method,
-        "sources": [{"type": m["type"], "id": m["id"], "title": m["title"]} for m in matched],
+        "sources": sources,
         "session_id": session_id,
     }

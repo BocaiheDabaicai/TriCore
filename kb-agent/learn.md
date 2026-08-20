@@ -1,5 +1,41 @@
 ## 学习记录
 
+> 你先熟悉一下项目，这个项目是从0开始一点一点建设起来的，通过AI和自我学习思考构建成现在的状况
+
+#### 日期：2026年8月20日
+
+- 现在新版的deepseek v4 pro收费很贵，和新的deepseek v4 flash相比起来提升大不大，和旧版本的deepseek v4 pro相比又如何，我好判断是否切换模型
+
+- 你讲解一下这个配置是什么意思？
+
+```powershell
+$env:ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+$env:ANTHROPIC_AUTH_TOKEN="<你的 DeepSeek API Key>"
+$env:ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
+$env:CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
+$env:CLAUDE_CODE_EFFORT_LEVEL="max"
+$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW="786432"
+```
+
+- 我想说的是你claude，我给你的配置，使用现在最新的deepseek v4 flash和pro区别大吗？按照上面这样配置来说，还是全部换成deepseek v4 flash
+
+- 基准测试就不做了吧？这是必要的吗？
+
+- JSON格式与BLOB格式相比起来，做数据的存储有什么优缺点？
+
+- 服务层是什么意思？怎么忽然我这个项目有了层级了？
+
+- 这句话是什么意思？`current = f"{current}\n{p}" if current else p`
+
+- 这两个方法我不理解，你讲一讲`split_chunks`,`add_chunks`
+
+#### 日期：2026年8月19日
+
+- null
+
 #### 日期：2026年8月14日
 
 - 如果先删除模板，再删除步骤，会出现什么问题？
@@ -71,5 +107,3 @@
 - 这个种子数据是独立运行的吗？一般来说，该怎么创建一些有效果的测试数据，我们这样做是好的吗？
 
 - 像这样的语法是什么意思？`question: str | None = None`
-
-

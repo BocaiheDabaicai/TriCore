@@ -13,6 +13,8 @@ from services.embedding_service import (
     is_configured as embed_is_configured,
     retrieve_top_k,
     rebuild_index,
+    sync_vector,
+    delete_vector,
 )
 
 router = APIRouter(prefix="/api/v1/document", tags=["文档问答"])
@@ -83,6 +85,10 @@ def create_doc(req: DocCreate, db: Session = Depends(get_db)):
     db.add(doc)
     db.commit()
     db.refresh(doc)
+
+    # 同步向量索引：不调这行，新文档要等手动 /reindex 才能被检索到
+    sync_vector(db, "document", doc.id, doc.title, doc.content)
+
     return {"message": "创建成功", "data": {"id": doc.id, "title": doc.title}}
 
 
@@ -182,12 +188,21 @@ def ask_document(req: AskRequest, db: Session = Depends(get_db)):
     db.add(Message(session_id=session_id, role="assistant", content=answer))
     db.commit()
 
+    # 同一条知识可能命中多个块，sources 按 (type, id) 去重，避免来源列表重复
+    seen = set()
+    sources = []
+    for m in matched:
+        key = (m["type"], m["id"])
+        if key not in seen:
+            seen.add(key)
+            sources.append({"type": m["type"], "id": m["id"], "title": m["title"]})
+
     return {
         "question": req.question,
         "answer": answer,
         "answer_source": source_name,
         "retrieval_method": retrieval_method,   # 标明这次检索用的是哪种方式
-        "sources": [{"type": m["type"], "id": m["id"], "title": m["title"]} for m in matched],
+        "sources": sources,
         "session_id": session_id,
     }
 
@@ -195,8 +210,9 @@ def ask_document(req: AskRequest, db: Session = Depends(get_db)):
 @router.post("/reindex")
 def reindex_knowledge(db: Session = Depends(get_db)):
     """
-    重建向量索引：把制度表 + 文档表全部内容重新向量化
-    - 新增/修改了知识后要调这个接口，向量检索才能看到最新数据
+    全量重建向量索引：把制度表 + 文档表 + 流程模板全部内容重新向量化
+    - 日常增删改知识已自动同步索引，一般不需要手动调用
+    - 此接口用于：首次建索引 / 怀疑索引和数据不一致时兜底修复
     - 返回索引条数
     """
     if not embed_is_configured():
@@ -224,6 +240,10 @@ def update_doc(doc_id: int, req: DocUpdate, db: Session = Depends(get_db)):
 
     db.commit()
     db.refresh(p)
+
+    # 内容变了，向量也要跟着更新，否则检索到的还是旧内容
+    sync_vector(db, "document", p.id, p.title, p.content)
+
     return {"message": "更新成功", "data": {"id": p.id, "title": p.title, "category": p.category}}
 
 
@@ -237,4 +257,8 @@ def delete_doc(doc_id: int, db: Session = Depends(get_db)):
 
     db.delete(p)
     db.commit()
+
+    # 文档删了，索引里的向量也要删，否则会检索到"幽灵数据"
+    delete_vector(db, "document", doc_id)
+
     return {"message": "删除成功", "data": {"id": doc_id}}
