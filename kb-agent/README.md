@@ -1,6 +1,6 @@
 # 企业知识库Agent
 
-基于 Python + FastAPI 的企业知识库系统，支持制度查询、文档问答、流程助手，具备 RAG（检索增强生成）能力。
+基于 Python + FastAPI 的企业知识库系统：统一上传（解析 + AI 识别分类）→ 统一知识库 → 智能问答，具备 RAG（检索增强生成）能力。
 
 ## 环境要求
 
@@ -36,8 +36,8 @@ python seed_data.py
 
 然后**重建向量索引**（让检索生效）：
 
-- 首次使用：调用一次 `POST /api/v1/document/reindex`
-- 之后新增/修改/删除制度、文档、流程模板都会**自动同步向量索引**，无需手动操作
+- 首次使用：调用一次 `POST /api/v1/knowledge/reindex`
+- 之后新增/修改/删除知识都会**自动同步向量索引**，无需手动操作
 - `reindex` 保留作为兜底：怀疑索引和数据不一致时全量重建
 
 ## 启动服务
@@ -63,19 +63,16 @@ kb-agent/
 │   ├── database.py            # 数据库引擎 + Base 基类
 │   └── config.py              # 读取 .env 配置
 ├── models/                    # ORM 模型（数据库表）
-│   ├── policy.py              # 制度表
-│   ├── document.py            # 文档表
-│   ├── workflow.py            # 流程模板表 + 步骤表
+│   ├── knowledge.py           # 统一知识表（kind 区分 制度/文档/流程）
 │   ├── message.py             # 对话消息表（多轮记忆）
-│   └── vector.py              # 知识向量表（语义检索）
+│   └── vector.py              # 知识向量表（语义检索，按块存储）
 ├── api/                       # 接口层
-│   ├── policy.py              # 制度查询（CRUD + 问答）
-│   ├── document.py            # 文档问答（CRUD + 问答 + 重建索引）
-│   ├── workflow.py            # 流程助手（模板/步骤 CRUD + 引导）
+│   ├── knowledge.py           # 统一知识库（上传 + CRUD + 重建索引）
 │   └── agent.py               # 智能问答（统一问答入口）
 ├── services/                  # 业务服务层
-│   ├── llm_service.py         # 大模型调用（RAG 生成）
-│   └── embedding_service.py   # 向量嵌入（建索引 + 语义检索）
+│   ├── llm_service.py         # 大模型调用（RAG 生成 + 上传内容识别分类）
+│   ├── embedding_service.py   # 向量嵌入（分块 + 建索引 + 语义检索 + 同步）
+│   └── file_parser.py         # 文件解析（txt/md/pdf/docx，含 docx 表格提取）
 ├── seed_data.py               # 测试数据初始化脚本
 ├── requirements.txt
 └── .env.example               # 配置模板
@@ -84,33 +81,18 @@ kb-agent/
 ## 接口列表
 
 ### 智能问答（推荐使用）
-- `POST /api/v1/agent/chat` — 统一问答入口，全局检索制度+文档+流程，支持多轮对话
+- `POST /api/v1/agent/chat` — 统一问答入口，全局检索所有知识，支持多轮对话
   - 请求体：`{"question": "我想请假三天怎么办？", "session_id": "可选，延续会话"}`
 
-### 制度管理
-- `GET /api/v1/policy/list` — 查询制度列表（支持 keyword、category 过滤）
-- `GET /api/v1/policy/{id}` — 查看制度详情
-- `POST /api/v1/policy/create` — 创建制度
-- `PUT /api/v1/policy/{id}` — 更新制度（只传要改的字段）
-- `DELETE /api/v1/policy/{id}` — 删除制度
-
-### 文档问答
-- `GET /api/v1/document/list` — 查询文档列表
-- `GET /api/v1/document/{id}` — 查看文档详情
-- `POST /api/v1/document/create` — 创建文档
-- `PUT /api/v1/document/{id}` — 更新文档
-- `DELETE /api/v1/document/{id}` — 删除文档
-- `POST /api/v1/document/ask` — 文档问答（支持多轮）
-- `POST /api/v1/document/reindex` — 全量重建向量索引（兜底用，知识变更已自动同步）
-
-### 流程助手
-- `GET /api/v1/workflow/templates` — 流程模板列表
-- `GET /api/v1/workflow/templates/{id}` — 模板详情（含步骤）
-- `POST /api/v1/workflow/templates/create` — 创建模板
-- `PUT /api/v1/workflow/templates/{id}` — 更新模板
-- `DELETE /api/v1/workflow/templates/{id}` — 删除模板（级联删除步骤）
-- `POST /api/v1/workflow/templates/{id}/steps` — 给模板添加步骤
-- `POST /api/v1/workflow/guide` — 流程引导
+### 统一知识库
+- `POST /api/v1/knowledge/upload` — **统一上传**：文件（txt/md/pdf/docx）→ 解析 → LLM 识别类型（制度/文档/流程）→ 入库 → 自动分块向量化
+  - 可选表单参数：`kind`（手动指定类型，覆盖 LLM 判断）、`category`（业务分类，不传则由 LLM 根据内容自动拟定）
+- `GET /api/v1/knowledge/list` — 知识列表（支持 keyword、category、kind 过滤）
+- `GET /api/v1/knowledge/{id}` — 知识详情
+- `POST /api/v1/knowledge/create` — 手工创建知识
+- `PUT /api/v1/knowledge/{id}` — 更新知识（只传要改的字段）
+- `DELETE /api/v1/knowledge/{id}` — 删除知识
+- `POST /api/v1/knowledge/reindex` — 全量重建向量索引（兜底用，知识变更已自动同步）
 
 ## 核心机制
 
@@ -125,13 +107,18 @@ kb-agent/
 - **二进制存储**：向量以 float32 BLOB 存库（比 JSON 文本省 4 倍空间），读取用 `np.frombuffer` 零解析成本——JSON 解析曾是最大瓶颈（1 万条约 3 秒）
 
 ### 索引自动同步
-- 增删改制度/文档/流程模板（含添加步骤）时，自动同步对应的向量，无需手动重建
-- `sync_vector`（新增/覆盖）、`delete_vector`（删除）、`sync_template_vector`（模板，步骤拼进内容）
+- 增删改知识（含上传、修改流程步骤）时，自动同步对应的向量，无需手动重建
+- `sync_vector`（分块、新增/覆盖）、`delete_vector`（删除）
 
 ### 文档分块（Chunking）
 - 长内容自动切块（默认 400 字/块，块间重叠 50 字），每块一个独立向量
 - 短内容（≤400 字）不分块；优先按段落边界切，不截断段落
 - 检索命中"块"而非整篇：答案更精准、喂给 LLM 的上下文更省 token
+
+### 文件解析
+- 支持 txt / md / pdf / docx 上传，解析成纯文本入库
+- docx 按文档顺序提取段落和表格：表格每行一条、`|` 分隔、合并单元格重复文字去重——制度文件里的收费标准表、申请单表不会丢失
+- 已知限制：Word 自动编号（"第X条"的 X）解析不到；表格与正文挤在同一分块时检索排序可能偏低
 
 ### 检索降级链
 ```
@@ -154,6 +141,33 @@ kb-agent/
 | 向量嵌入 | 硅基流动 bge-m3（可换任意家） |
 | 向量计算 | NumPy（矩阵化相似度计算） |
 | 向量存储 | SQLite 表（后续可升级 Chroma/Milvus 向量库） |
+| 文件解析 | pypdf（PDF）、python-docx（Word） |
+
+## 架构演进
+
+### v0.1：三表分型（2026-08-11 ~ 08-20）
+
+知识按类型分三张表存储：`policies`（制度）、`documents`（文档）、`workflow_templates` + `workflow_steps`（流程模板和步骤）。对应三组接口，各管各的增删改查和问答。
+
+### v0.2：统一知识表（2026-08-20）
+
+**转变**：三表合一为 `knowledge` 表，用 `kind` 字段（policy/document/workflow）区分类型；流程步骤从独立子表退化为 `steps_json` JSON 字段；接口合并为一组 `/api/v1/knowledge`，新增统一上传入口。
+
+**原因**：
+
+1. 用户不该为分类操心——上传一个文件，还要先判断"它属于制度、文档还是流程"再选对应接口，这违背了统一问答入口"用户不知道也不关心信息在哪个模块"的设计思想
+2. 三组接口 90% 的代码是重复的 CRUD 模板
+3. 每次新增知识类型（通知、模板文件……）都要建表 + 写一组接口
+
+**收益**：
+
+1. 一个上传接口走天下：文件 → 解析 → LLM 识别分类 → 入库 → 立即可问答
+2. 接口从三组（16 个）缩为一组（7 个），维护成本大降
+3. 新类型只加 kind 枚举值，不改表结构
+
+**代价**：流程步骤从关系型数据（可独立增删改、级联删除）退化为 JSON 字段——损失了按步骤查询的能力，换来模型统一。当前业务里步骤只用于展示和拼进向量，这个代价可接受。
+
+**数据建模心得**：单表多型（一张表 + type 字段）适合"各类型结构大同小异、未来还会加类型"的场景；多表分型适合"各类型结构差异大、需要各自独立演进"的场景。本项目在两种方式都实践过之后，选择了前者。
 
 ## 开发记录
 

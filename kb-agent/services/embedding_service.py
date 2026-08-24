@@ -1,7 +1,9 @@
 # 向量嵌入服务 —— 把文字转成向量 + 余弦相似度检索
 # 流程：
-#   建索引：每条制度/文档 → 调 embedding API → 得到向量 → 归一化后存库（"提前算好"）
+#   建索引：每条知识 → 调 embedding API → 得到向量 → 归一化后存库（"提前算好"）
 #   检索：  问题 → 调 embedding API → 得到向量 → 归一化 → 一次矩阵乘法算完所有相似度 → 取最高的
+
+import json
 
 import numpy as np
 from openai import OpenAI
@@ -9,9 +11,7 @@ from sqlalchemy.orm import Session
 
 from core.config import EMBEDDING_API_KEY, EMBEDDING_BASE_URL, EMBEDDING_MODEL
 from models.vector import KnowledgeVector
-from models.policy import Policy
-from models.document import Document
-from models.workflow import WorkflowTemplate
+from models.knowledge import Knowledge
 
 # 独立的客户端（embedding 服务和 LLM 服务通常是两家的）
 client = OpenAI(
@@ -63,17 +63,24 @@ def to_vector(text: str) -> np.ndarray:
     return normalize(np.array(embed_text(text), dtype=np.float32))
 
 
-def build_template_content(template) -> str:
+def knowledge_index_content(item) -> str:
     """
-    流程模板的向量化内容：描述 + 步骤拼串
+    知识入库向量化的内容：
+    - 流程类型：正文 + 步骤拼串（步骤存在 steps_json 里）
+    - 其他类型：直接用正文
     建索引和同步都走这一个函数，保证两边存的向量内容格式一致
     """
-    steps_text = " → ".join(
-        f"{s.order}.{s.name}({s.role})" for s in template.steps
-    )
-    if steps_text:
-        return f"{template.description}。流程步骤：{steps_text}"
-    return template.description
+    if item.kind == "workflow" and item.steps_json:
+        try:
+            steps = json.loads(item.steps_json)
+            steps_text = " → ".join(
+                f"{s['order']}.{s['name']}({s['role']})" for s in steps
+            )
+            if steps_text:
+                return f"{item.content}。流程步骤：{steps_text}"
+        except Exception:
+            pass   # steps_json 解析失败就只用正文
+    return item.content
 
 
 def split_chunks(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str]:
@@ -127,33 +134,23 @@ def add_chunks(db: Session, source_type: str, source_id: int, title: str, conten
 
 def rebuild_index(db: Session) -> int:
     """
-    重建向量索引：把制度+文档+流程模板全部转成向量存入 knowledge_vectors 表
+    重建向量索引：把统一知识表（制度/文档/流程）全部转成向量存入 knowledge_vectors 表
     - 先清空旧向量，再全量重建
-    - 返回索引条数
+    - 返回索引条数（= 块数）
     """
     # 清空旧索引
     db.query(KnowledgeVector).delete()
     db.commit()
 
-    # 收集全部知识
-    policies = db.query(Policy).all()
-    documents = db.query(Document).all()
-    templates = db.query(WorkflowTemplate).all()
+    # 收集全部知识（统一表：制度/文档/流程都在这里，用 kind 区分）
+    items = db.query(Knowledge).all()
 
     # 逐条知识分块向量化入库 —— 向量已归一化（提前把"除以模长"算好，查询时只需点积）
     # 长内容自动切成多块（每块一个向量），短内容一块搞定
+    # source_type 存 kind 值：语义从"来自哪张表"变为"哪种知识类型"
     count = 0
-    for p in policies:
-        count += add_chunks(db, "policy", p.id, p.title, p.content)
-
-    for d in documents:
-        count += add_chunks(db, "document", d.id, d.title, d.content)
-
-    # 流程模板：把步骤拼进内容再向量化
-    # 这样"我想请假"能检索到模板，且步骤信息也在上下文里
-    for t in templates:
-        full_content = build_template_content(t)
-        count += add_chunks(db, "workflow", t.id, t.name, full_content)
+    for item in items:
+        count += add_chunks(db, item.kind, item.id, item.title, knowledge_index_content(item))
 
     db.commit()
     return count
@@ -200,11 +197,6 @@ def delete_vector(db: Session, source_type: str, source_id: int) -> None:
         KnowledgeVector.source_id == source_id,
     ).delete()
     db.commit()
-
-
-def sync_template_vector(db: Session, template) -> None:
-    """同步流程模板的向量 —— 模板内容 = 描述 + 步骤拼串（与全量重建格式一致）"""
-    sync_vector(db, "workflow", template.id, template.name, build_template_content(template))
 
 
 def retrieve_top_k(db: Session, question: str, k: int = 3) -> list[dict]:
