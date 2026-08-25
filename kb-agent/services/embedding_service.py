@@ -92,22 +92,55 @@ def split_chunks(text: str, chunk_size: int = 400, overlap: int = 50) -> list[st
     规则：
       - 短文本（<= chunk_size）不分，整段作为一块
       - 优先按段落边界组块，尽量不在段落中间切断
-      - 超长段落硬切，块与块之间保留 overlap 个字的重叠，
+      - 连续表格行合并成"表格单元"，整体独立成块（表格语义集中，检索更易命中）
+      - 超长段落/表格硬切，块与块之间保留 overlap 个字的重叠，
         避免一句话被拦腰截断、上下文丢失
     """
     text = text.strip()
     if len(text) <= chunk_size:
         return [text]
 
+    lines = [seg.strip() for seg in text.split("\n") if seg.strip()]
+
+    # 第一步：标记表格行，连续的表格行合并成"表格单元"
+    # 表格行特征：docx 解析器把表格转成每行一条、单元格用 " | " 分隔的文本。
+    # 但合并单元格行/序号行没有 " | "（如"申请住宿事由"、"1"），
+    # 所以紧邻表格行的短行也视为表格行（按从左到右传播，覆盖 1、2、3 这类连续序号行）
+    is_row = [" | " in line for line in lines]
+    for idx in range(len(lines)):
+        if is_row[idx]:
+            continue
+        short = len(lines[idx]) < 40
+        prev_row = idx > 0 and is_row[idx - 1]
+        next_row = idx + 1 < len(lines) and is_row[idx + 1]
+        is_row[idx] = short and (prev_row or next_row)
+
+    units = []
+    i = 0
+    while i < len(lines):
+        if is_row[i]:
+            rows = []
+            while i < len(lines) and is_row[i]:
+                rows.append(lines[i])
+                i += 1
+            units.append(("\n".join(rows), True))
+        else:
+            units.append((lines[i], False))
+            i += 1
+
     chunks = []
     current = ""
-    for p in (seg.strip() for seg in text.split("\n") if seg.strip()):
-        # 当前块装不下这个段落 → 封口，段落另起新块
-        if current and len(current) + 1 + len(p) > chunk_size:
+    for unit, is_table in units:
+        # 表格优先独立成块：封口前面的内容，避免表格语义被前后段落稀释
+        if is_table and current:
             chunks.append(current)
             current = ""
-        current = f"{current}\n{p}" if current else p
-        # 段落本身超长 → 硬切，下一段带上 overlap 个字的重叠
+        # 当前块装不下这个单元 → 封口，单元另起新块
+        if current and len(current) + 1 + len(unit) > chunk_size:
+            chunks.append(current)
+            current = ""
+        current = f"{current}\n{unit}" if current else unit
+        # 单元本身超长 → 硬切（可能切断表格行，可接受），下一段带上 overlap 个字的重叠
         while len(current) > chunk_size:
             chunks.append(current[:chunk_size])
             current = current[chunk_size - overlap:]

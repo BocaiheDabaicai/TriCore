@@ -83,6 +83,8 @@ kb-agent/
 ### 智能问答（推荐使用）
 - `POST /api/v1/agent/chat` — 统一问答入口，全局检索所有知识，支持多轮对话
   - 请求体：`{"question": "我想请假三天怎么办？", "session_id": "可选，延续会话"}`
+- `POST /api/v1/agent/chat/stream` — 流式版问答（SSE），回答逐段返回，前端可做打字机效果
+  - 事件：`meta`（来源/会话信息）→ `delta`（回答增量，多次）→ `done`（结束）
 
 ### 统一知识库
 - `POST /api/v1/knowledge/upload` — **统一上传**：文件（txt/md/pdf/docx）→ 解析 → LLM 识别类型（制度/文档/流程）→ 入库 → 自动分块向量化
@@ -171,4 +173,4 @@ kb-agent/
 
 ## 开发记录
 
-见仓库根目录 `note.md`。
+见仓库根目录 `README.md` 的「更新日志」章节。

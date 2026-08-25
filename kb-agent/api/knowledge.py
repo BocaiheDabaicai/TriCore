@@ -99,22 +99,24 @@ async def upload_knowledge(
     if not text.strip():
         return {"message": "文件内容为空，无法入库", "data": None}
 
-    # 识别分类：手动指定优先，否则交给 LLM（kind 必识别，category 没传表单值时也一并生成）
-    steps = None
-    if kind and kind in ALLOWED_KINDS:
-        final_kind = kind
+    # 识别分类：统一调一次 LLM（kind/category/steps 一起拿），手动值优先覆盖
+    # - 手动指定了 kind → 用值手动，title 用文件名（不依赖 LLM），但 category 仍可自动生成
+    # - category 优先级：表单值 > LLM 生成 > "未分类"
+    manual_kind = kind if (kind and kind in ALLOWED_KINDS) else None
+    result = classify_upload(file.filename, text) if is_configured() else None
+
+    if manual_kind:
+        final_kind = manual_kind
         final_title = file.filename.rsplit(".", 1)[0]
-        final_category = category or "未分类"
-    elif is_configured():
-        result = classify_upload(file.filename, text)
+    elif result:
         final_kind = result["kind"]
         final_title = result["title"]
-        steps = result["steps"]
-        final_category = category or result["category"]
     else:
         final_kind = "document"
         final_title = file.filename.rsplit(".", 1)[0]
-        final_category = category or "未分类"
+
+    final_category = category or (result["category"] if result else None) or "未分类"
+    steps = result["steps"] if (result and final_kind == "workflow") else None
 
     item = Knowledge(
         title=final_title,

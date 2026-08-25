@@ -1,3 +1,7 @@
 tricore-web-rust/node_modules/
 tricore-server/target/debug/
 tricore-web-rust/dist/
+archived/tricore-server/target/debug/
+archived/tricore-web-rust/node_modules/
+archived/tricore-server/src/modules/
+archived/tricore-web-rust/dist/

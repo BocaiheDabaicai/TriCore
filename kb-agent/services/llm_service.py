@@ -23,31 +23,15 @@ def is_configured() -> bool:
     return all([LLM_API_KEY, LLM_BASE_URL, LLM_MODEL])
 
 
-def chat_with_context(question: str, context: str) -> str:
-    """
-    带资料回答问题（RAG 的"增强+生成"部分）
-    - question: 用户的问题
-    - context: 检索出来的相关资料（来自知识库）
-    """
-    # 提示词：给模型交代角色、规则和参考资料
-    system_prompt = (
+def build_system_prompt(context: str) -> str:
+    """RAG 提示词：给模型交代角色、规则和参考资料（普通问答和多轮共用）"""
+    return (
         "你是企业知识库助手。请仅根据下面提供的【参考资料】回答用户问题。"
         "如果资料中没有答案，就诚实地说'知识库中暂无相关内容'，不要编造。"
         "资料中标记为【制度】的是公司规章制度，标记为【文档】的是操作指引类文档，"
         "标记为【流程模板】的是办事流程，回答时应把流程步骤讲清楚。\n\n"
         f"【参考资料】\n{context}"
     )
-
-    response = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": question},
-        ],
-        temperature=0.3,  # 低温度 = 回答更稳定、更少发挥（知识问答场景合适）
-    )
-
-    return response.choices[0].message.content
 
 
 def classify_upload(filename: str, text: str) -> dict:
@@ -95,45 +79,15 @@ def classify_upload(filename: str, text: str) -> dict:
         return {"kind": "document", "title": filename, "category": "未分类", "steps": None}
 
 
-def pick_template(description: str, template_list: str) -> str:
-    """让 LLM 从模板列表里挑最匹配的一个，只返回模板名"""
-    system_prompt = (
-        "你是企业流程助手。用户会描述一件想办的事，请从下面的模板列表中"
-        "挑选最匹配的一个模板。\n"
-        "要求：只输出模板名称本身，不要输出任何其他内容。\n"
-        "如果没有任何模板匹配，输出：无匹配\n\n"
-        f"【模板列表】\n{template_list}"
-    )
-
-    response = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": description},
-        ],
-        temperature=0.3,
-    )
-
-    return response.choices[0].message.content.strip()   # strip 去掉首尾空白/换行
-
-
 def chat_with_history(question: str, context: str, history: list[dict]) -> str:
     """
-    带历史记录的多轮问答
+    带历史记录的多轮问答（history 为空时就是单轮问答）
     - question: 当前问题
     - context: 检索到的资料
     - history: 之前的对话，格式 [{"role": "user"/"assistant", "content": "..."}, ...]
     """
-    system_prompt = (
-        "你是企业知识库助手。请仅根据下面提供的【参考资料】回答用户问题。"
-        "如果资料中没有答案，就诚实地说'知识库中暂无相关内容'，不要编造。"
-        "资料中标记为【制度】的是公司规章制度，标记为【文档】的是操作指引类文档，"
-        "标记为【流程模板】的是办事流程，回答时应把流程步骤讲清楚。\n\n"
-        f"【参考资料】\n{context}"
-    )
-
     # 消息列表 = 系统指令 + 历史对话 + 当前问题
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [{"role": "system", "content": build_system_prompt(context)}]
     messages.extend(history)
     messages.append({"role": "user", "content": question})
 
@@ -144,3 +98,26 @@ def chat_with_history(question: str, context: str, history: list[dict]) -> str:
     )
 
     return response.choices[0].message.content
+
+
+def stream_chat(question: str, context: str, history: list[dict]):
+    """
+    流式版多轮问答：生成器逐段产出回答文本（SSE 接口用）
+    - stream=True 让 API 不再等全文生成完，而是一段一段返回增量
+    - yield 出去的每一段都立刻可以发给前端，形成"打字机"效果
+    """
+    messages = [{"role": "system", "content": build_system_prompt(context)}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": question})
+
+    response = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=messages,
+        temperature=0.3,
+        stream=True,
+    )
+
+    for chunk in response:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
