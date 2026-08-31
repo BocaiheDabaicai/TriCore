@@ -232,16 +232,25 @@ def delete_vector(db: Session, source_type: str, source_id: int) -> None:
     db.commit()
 
 
-def retrieve_top_k(db: Session, question: str, k: int = 3) -> list[dict]:
+def retrieve_top_k(db: Session, question: str, k: int = 6, threshold: float = 0.5) -> list[dict]:
     """
     向量检索（矩阵版）：
       1. 问题 → 向量 → 归一化
       2. 把库里所有向量叠成一个矩阵（n 行 × 1024 列）
       3. 一次矩阵乘法 matrix @ question_vec，同时算出 n 个相似度
          （索引里的向量已归一化，点积 = 余弦相似度，结果和原来完全一样）
-      4. argsort 取最高的 k 条
+      4. 按分数从高到低取：高于 threshold 的块有几块取几块，最多 k 块
     为什么快：矩阵乘法由 numpy 在 C 语言底层实现，配合 CPU 的向量指令（SIMD）并行执行，
     替代了原来"Python for 循环逐条算"的方式。n 条数据从 n 次 Python 计算 → 1 次 C 计算。
+
+    检索质量（2026-08-31 标定，debug_score_distribution.py 实测）：
+      - 分数阈值：低于 threshold 的块是噪声，不喂给 LLM
+      - 动态 k：命中块多就多喂（答案分散在多个块，回答更丰富），命中块少就少喂
+      - 阈值为什么定 0.5：bge-m3 的分数区分度有限——强命中 0.57~0.74，
+        弱命中只有 ~0.50（如「信息安全制度」top1 才 0.53），
+        而库里没有的问题（「工资什么时候发放」）也能到 0.64。
+        绝对阈值区分不了命中和未命中，所以 0.5 只负责砍明显垃圾，
+        真正的命中判断交给 LLM（prompt 要求资料不足时诚实回复"暂无相关内容"）。
     """
     question_vec = to_vector(question)
 
@@ -259,17 +268,19 @@ def retrieve_top_k(db: Session, question: str, k: int = 3) -> list[dict]:
     # 一次矩阵-向量乘法，算出所有行的相似度
     scores = matrix @ question_vec
 
-    # argsort 返回"从小到大排序后各元素的原下标"，[::-1] 倒序成"从大到小"，再取前 k 个
-    top_idx = np.argsort(scores)[::-1][:k]
-
-    return [
-        {
-            "score": round(float(scores[i]), 4),
-            "type": rows[i].source_type,
-            "id": rows[i].source_id,
-            "chunk_index": rows[i].chunk_index,
-            "title": rows[i].title,
-            "content": rows[i].content,
-        }
-        for i in top_idx
-    ]
+    # 全部按分数从高到低排序，逐个收：分数已降序，遇到第一个低于阈值的后面只会更低，直接停
+    matched = []
+    for i in np.argsort(scores)[::-1]:
+        if scores[i] < threshold or len(matched) >= k:
+            break
+        matched.append(
+            {
+                "score": round(float(scores[i]), 4),
+                "type": rows[i].source_type,
+                "id": rows[i].source_id,
+                "chunk_index": rows[i].chunk_index,
+                "title": rows[i].title,
+                "content": rows[i].content,
+            }
+        )
+    return matched

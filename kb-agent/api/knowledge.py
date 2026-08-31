@@ -42,6 +42,7 @@ class KnowledgeCreate(BaseModel):
     kind: str
     content: str
     steps: list[dict] | None = None   # 仅 workflow 使用：[{"order":1,"name":"...","role":"..."}]
+    keywords: str | None = None       # 可选：手动指定关键词，不传则没有（宽度回答只显示标题）
 
 
 class KnowledgeUpdate(BaseModel):
@@ -51,6 +52,7 @@ class KnowledgeUpdate(BaseModel):
     kind: str | None = None
     content: str | None = None
     steps: list[dict] | None = None
+    keywords: str | None = None
 
 
 def item_to_dict(item: Knowledge) -> dict:
@@ -68,6 +70,7 @@ def item_to_dict(item: Knowledge) -> dict:
         "kind": item.kind,
         "content": item.content,
         "steps": steps,
+        "keywords": item.keywords,
         "filename": item.filename,
         "created_at": item.created_at.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -117,6 +120,7 @@ async def upload_knowledge(
 
     final_category = category or (result["category"] if result else None) or "未分类"
     steps = result["steps"] if (result and final_kind == "workflow") else None
+    final_keywords = result["keywords"] if result else None
 
     item = Knowledge(
         title=final_title,
@@ -124,6 +128,7 @@ async def upload_knowledge(
         kind=final_kind,
         content=text,
         steps_json=json.dumps(steps, ensure_ascii=False) if steps else None,
+        keywords=final_keywords,
         filename=file.filename,
     )
     db.add(item)
@@ -176,6 +181,7 @@ def create_knowledge(req: KnowledgeCreate, db: Session = Depends(get_db)):
         kind=normalize_kind(req.kind),
         content=req.content,
         steps_json=json.dumps(req.steps, ensure_ascii=False) if req.steps else None,
+        keywords=req.keywords,
     )
     db.add(item)
     db.commit()
@@ -205,6 +211,8 @@ def update_knowledge(item_id: int, req: KnowledgeUpdate, db: Session = Depends(g
         item.content = req.content
     if req.steps is not None:
         item.steps_json = json.dumps(req.steps, ensure_ascii=False)
+    if req.keywords is not None:
+        item.keywords = req.keywords
 
     db.commit()
     db.refresh(item)

@@ -5,3 +5,10 @@ archived/tricore-server/target/debug/
 archived/tricore-web-rust/node_modules/
 archived/tricore-server/src/modules/
 archived/tricore-web-rust/dist/
+ai-assistant/.env
+ai-assistant/.venv/
+ai-assistant/__pycache__/
+ai-assistant/node_modules/
+ai-assistant/dist/
+
+ai-assistant/frontend/node_modules/

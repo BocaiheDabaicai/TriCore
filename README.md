@@ -64,9 +64,77 @@ ai-assistant（统一AI助手服务：调度器 + 统一问答接口）
 
 推荐先做 **doc-review-agent（文档审查）**：上传合同/方案/报告 → LLM 审查风险、给修改建议。复用现有文件解析能力，不依赖外部系统，能最快验证多 Agent 路由。（待确认）
 
+## 快速启动
+
+> 端口约定：kb-agent 8000、ai-assistant 8001、前端 5173，浏览器访问 http://localhost:5173
+
+### 1. 依赖安装（首次，每个项目各装一次）
+
+```powershell
+# kb-agent（Python）
+cd kb-agent
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+
+# ai-assistant（Python，另开一个终端）
+cd ai-assistant
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+
+# 前端（Vite + Vue3）
+cd ai-assistant\frontend
+npm install
+```
+
+### 2. 配置（首次）
+
+kb-agent 和 ai-assistant 各有一份 `.env.example`，复制成 `.env` 并按注释填入密钥（两个项目的 LLM 配置相同；kb-agent 还需要 Embedding 配置，见它的 .env.example 注释）。
+
+### 3. 启动（日常，三个终端各跑一个）
+
+```powershell
+# 终端 1：kb-agent（企业知识问答）
+cd kb-agent
+.venv\Scripts\python.exe -m uvicorn main:app --port 8000
+
+# 终端 2：ai-assistant（统一调度器）
+cd ai-assistant
+.venv\Scripts\python.exe -m uvicorn main:app --port 8001
+
+# 终端 3：前端（聊天界面）
+cd ai-assistant\frontend
+npm run dev
+```
+
+kb-agent 没启动时 ai-assistant 也能用（知识问题自动降级为通用对话）。
+
 ## 更新日志
 
 > 历史备注：早期项目（tricore 系列：销售/库存/办公协同业务系统）已于 2026-08-25 归档至 `archived/`，不再维护。
+
+#### 2026年08月31日【企业知识库Agent·检索质量与未命中记录】
+
+- **回答机制讨论**：评估宽度/深度分流——结论保留（枚举/概览类问题 RAG 天生答不了，移除会重现"只答出两个制度"的问题）；宽度机制触发场景窄但成本低，像保险
+- **检索质量改进（分数阈值 + 动态 k）**：先标定（`debug_score_distribution.py` 实测 bge-m3 分数分布）——强命中 0.57~0.74，弱命中 ~0.50，但库里没有的问题也能到 0.64，**绝对阈值区分不了命中和未命中**；设计定为：阈值 0.5 只砍明显垃圾，动态取块（上限 6，命中块多回答更丰富），真正的命中判断交给 LLM 诚实回答机制
+- **未命中问题记录（missed_questions 表）**：知识库答不上的问题自动入库——用户问什么没答上，就是该补什么知识；两个触发点（检索零命中 / LLM 回复"暂无相关内容"，后者更可靠）；重复提问累计次数；新增管理接口 `GET/DELETE /api/v1/missed`（按次数排序，补完知识后删除）
+- 讨论记录：长文档（几十MB）存储——SQLite TEXT 装得下但该存磁盘、瓶颈在 embedding 成本不在存储；向量库（Milvus 等）当前规模不需要（NumPy 全量点积够用，README 已预留迁移路径）；批量上传三方案对比（前端并发 / 后端批量接口 / 任务队列），推荐先做前端并发
+- 未命中回复文案统一：固定话术与 LLM 诚实回复两处统一为"知识库中暂无相关内容，该问题已记录，我们会尽快补充相关资料。"（此前 LLM 路径只回复短短语、缺少记录告知，已修复）
+- **Agent 管理界面方案确认（下一步）**：管理入口放调度器前端（侧边栏：聊天 / Agent 管理）——问答一个入口、管理也一个入口；调用情况由 ai-assistant 新增 `calls` 表记录（意图/目标Agent/耗时/降级，它的第一个数据库）；数据信息走代理模式（前端 → 8001 → 各 Agent 管理接口，不直连）；先不抽象统一管理协议，先把 kb-agent 页面做实（上传/知识列表/未命中清单）
+
+#### 2026年08月26日【企业AI助手·调度器与前端 + 知识库宽深度问答】
+
+- **ai-assistant 调度服务建成**（8001 端口）：六步计划全部完成——服务骨架、LLM 服务层（意图识别 JSON 输出 + 通用对话兜底）、统一问答接口 `/api/v1/chat` 与 `/api/v1/chat/stream`（SSE）、Agent 注册表 + kb-agent 适配器（httpx 调用 + SSE 原样透传）
+  - 路由规则：knowledge 且 kb-agent 在线 → 转发；kb-agent 不可用 → 降级兜底（`degraded: true`），入口永不中断
+  - 兜底对话不落库，由前端传 history；kb-agent 多轮记忆仍走它的 session_id
+- **前端建成**（Vite + Vue3，`ai-assistant/frontend/`，5173 端口）：聊天界面 + SSE 流式渲染 + markdown + 来源展示；Vite 代理 `/api` → 8001，无跨域
+  - 请求三层架构：`api/request.js` axios 实例（baseURL/超时/拦截器）→ `api/chat.js` 接口封装（普通请求 axios、SSE 流式 fetch 生成器）→ 组件只调函数
+  - pinia 状态管理（Options 写法：state/actions 分区），组件拆分 ChatHeader / MessageList / MessageBubble / ChatInput，App.vue 纯布局，组件直读 store 不传 props
+- **kb-agent 宽度/深度分流问答**（见 kb-agent README「核心机制」）：宽度（列举/概览）走列表查询列「标题+关键词」，深度（具体细节）走向量检索 top3；维度判断纯 AI（只给当前问题 + 上一轮问题，不写词表不喂名单），拿不准偏向 depth；两种回答末尾带引导语形成纠正闭环
+  - knowledge 表新增 keywords 字段（启动时自动迁移补列，旧数据零丢失）；上传时 LLM 顺带生成关键词；存量数据 `backfill_keywords.py` 补录
+- **修复 SSE 透传丢换行 bug**：`iter_lines()` 剥换行未补回 + 空行被过滤 → 前端按 `\n\n` 切块永远切不出来，流式界面永远「思考中…」；修复为逐行补 `\n` 保留空行
+- 新增「快速启动」章节：三个服务的依赖安装、配置、启动命令与端口约定
 
 #### 2026年08月25日【企业知识库Agent·分块优化与流式输出】
 

@@ -31,5 +31,9 @@ class Knowledge(Base):
     # 原始文件名（上传的知识记录来源，手工创建为 None）
     filename: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
+    # 关键词索引（宽度查询用）：LLM 生成，格式如 "住宿、申请、押金"
+    # 用途：宽度回答时列"标题+关键词"当目录，用户点名后走深度查询
+    keywords: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
