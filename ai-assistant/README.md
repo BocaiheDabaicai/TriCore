@@ -5,7 +5,7 @@
 ## 目标架构
 
 ```
-前端界面（Vite，属于 ai-assistant 服务）
+前端（聊天端 frontend / 管理端 admin-frontend，均属于本服务）
     ↓ SSE 流式
 ai-assistant（统一AI助手服务：意图识别 + 路由 + 汇总）
     ├→ kb-agent             企业知识问答（第一个接入）
@@ -29,20 +29,20 @@ ai-assistant（统一AI助手服务：意图识别 + 路由 + 汇总）
 | 组件 | 选型 |
 |---|---|
 | 后端 | Python + FastAPI（与 kb-agent 一致） |
-| 前端 | Vite（新版，框架待定） |
+| 前端 | 聊天端：Vite + Vue3 + pinia；管理端：Vite + Vue3 + pinia + vue-router + Tailwind CSS 4 + daisyUI 5 |
 | 服务间调用 | httpx（支持 SSE 流式透传） |
 | 大模型 | DeepSeek（OpenAI 兼容接口） |
 
 ## 后续规划
 
-### Agent 管理界面（方案已确认，待实现，2026-08-31 记录）
+### Agent 管理界面（v1 已实现，2026-09-01）
 
-- 位置：调度器前端（ai-assistant）——问答一个入口，管理也一个入口；侧边栏分「聊天 / Agent 管理」
-- 调用情况：ai-assistant 新增第一张表 `calls`（SQLite，与 kb-agent 同款技术栈），每次路由记一笔（意图、目标 Agent、耗时、是否降级）——这个数据只有调度器有全貌，必须由它记录；管理页展示各 Agent 调用次数/成功率/平均耗时、最近调用记录
-- 数据信息：代理模式——前端只调调度器的管理接口，由调度器转发到各 Agent 的管理接口（kb-agent 的 knowledge/missed 已现成），前端不直连各 Agent（与问答链路同一模式）；代价是多一跳网络，换来前端零耦合
-- 页面结构：总览（各 Agent 在线状态 + 调用统计）/ kb-agent（上传、知识列表、未命中问题清单）
-- 原则：先不抽象统一管理协议——先把 kb-agent 页面做实，第二个 Agent 接入时再提炼协议
-- 第一步：`calls` 表 + 管理页骨架（前端加侧边栏）
+- **独立管理端前端** `admin-frontend/`（5174 端口）：与聊天端分离（受众、权限、部署范围不同）；侧边栏 4 条路由（总览 / 上传知识 / 知识列表 / 未命中问题），Vite 8 + Vue3 + vue-router 5 + pinia 4 + Tailwind 4 + daisyUI 5
+- **calls 表已建成**：每次问答调用记一笔（意图、实际回答来源、是否降级、耗时），流式接口用生成器 try/finally 保证断流也落库；总览页展示调用统计（总次数 / 知识问答成功率 / 降级次数 / 平均耗时）与最近调用记录
+- **kb-agent 管理页已做实**：上传（类型/分类可选）、知识列表（筛选 / 删除）、未命中清单（删除 / 清空）
+- **代理模式**：前端只调 `/api/v1/admin`（overview/calls 来自本服务，kb 数据转发 kb-agent 的 knowledge/missed 接口），前端不直连 Agent；kb-agent 不可用统一返回 502
+- 原则：先不抽象统一管理协议——kb-agent 页面做实后，第二个 Agent 接入时再提炼协议
+- 剩余：知识详情/编辑页、调用统计按天图表、Agent 清单目前硬编码在 admin.py（新 Agent 接入时接 registry）
 
 ### 会话总结（已设计，待实现，2026-08-26 记录）
 
@@ -52,6 +52,7 @@ ai-assistant（统一AI助手服务：意图识别 + 路由 + 汇总）
 
 ## 更新日志
 
+- 2026-09-01 管理界面 v1：前端拆分为聊天端（frontend）+ 管理端（admin-frontend，5174，Vite 8 + vue-router 5 + Tailwind 4 + daisyUI 5）；本服务建库（SQLite assistant.db + calls 表，每次问答记一笔）；新增 `/api/v1/admin`（overview 统计 / calls 记录 / kb 代理转发：知识列表、删除、上传、未命中清单），kb-agent 不可用统一 502
 - 2026-08-26 前端重构：axios 统一请求（`api/request.js` 实例 + 拦截器）、pinia 状态管理（Options 写法）、组件拆分（ChatHeader / MessageList / MessageBubble / ChatInput），App.vue 纯布局；组件直读 store 不传 props；`/status` 移至 `/api/status` 统一前缀
 - 2026-08-26 修复 SSE 透传丢换行 bug：registry 透传时 `iter_lines()` 剥掉的换行未补回、空行被过滤，导致前端按 `\n\n` 切块失败、流式界面永远「思考中…」；修复为逐行补 `\n`、保留空行；前端 streamChat 增加流结束兜底解析
 
@@ -71,8 +72,11 @@ ai-assistant（统一AI助手服务：意图识别 + 路由 + 汇总）
 # 2. ai-assistant（8001 端口，在 ai-assistant 目录）
 .venv\Scripts\python.exe -m uvicorn main:app --port 8001
 
-# 3. 前端（5173 端口，在 ai-assistant\frontend 目录）
+# 3. 聊天端前端（5173 端口，在 ai-assistant\frontend 目录）
+npm run dev
+
+# 4. 管理端前端（5174 端口，在 ai-assistant\admin-frontend 目录）
 npm run dev
 ```
 
-浏览器打开 http://localhost:5173
+浏览器打开：聊天端 http://localhost:5173、管理端 http://localhost:5174

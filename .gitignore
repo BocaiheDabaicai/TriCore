@@ -12,3 +12,7 @@ ai-assistant/node_modules/
 ai-assistant/dist/
 
 ai-assistant/frontend/node_modules/
+
+manager/.venv/
+manager/__pycache__/
+manager/logs/

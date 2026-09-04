@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@plugin "daisyui";
+
+/* Tailwind v4 是 CSS-first 配置：不用 tailwind.config.js，
+   @plugin 直接在这里声明 daisyUI（主题在 index.html 的 data-theme 上） */
+
+body {
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}

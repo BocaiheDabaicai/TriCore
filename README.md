@@ -7,7 +7,7 @@
 
 | 目录 | Agent | 职责 | 状态 |
 |---|---|---|---|
-| `ai-assistant` | 统一 AI 助手（调度器） | 意图识别、路由分发、结果汇总、前端界面 | 规划中（占位） |
+| `ai-assistant` | 统一 AI 助手（调度器） | 意图识别、路由分发、结果汇总、调用统计；聊天端 + 管理端两个前端 | 运行中（v0.2） |
 | `kb-agent` | 企业知识问答 | 制度查询、文档问答、流程助手（RAG） | 运行中（v0.2） |
 | `doc-review-agent` | 企业项目文档审查 | 审查合同、方案、报告，指出问题与风险 | 规划中 |
 | `data-analysis-agent` | 企业数据分析 | 基于业务数据查询、统计、分析与归纳 | 规划中 |
@@ -19,7 +19,7 @@
 ### 目标架构
 
 ```
-前端界面（聊天窗口，属于 ai-assistant 服务）
+前端（聊天端 frontend + 管理端 admin-frontend，均属于 ai-assistant 服务）
     ↓
 ai-assistant（统一AI助手服务：调度器 + 统一问答接口）
     ├→ kb-agent             企业知识问答
@@ -64,9 +64,47 @@ ai-assistant（统一AI助手服务：调度器 + 统一问答接口）
 
 推荐先做 **doc-review-agent（文档审查）**：上传合同/方案/报告 → LLM 审查风险、给修改建议。复用现有文件解析能力，不依赖外部系统，能最快验证多 Agent 路由。（待确认）
 
+## 统一服务管理（manager）设计
+
+> 服务多了以后，每个服务占一个终端、状态靠肉眼盯不可持续——由 manager 守护服务统一管理各服务的启动、运行状态、自动重启、停止与日志
+
+### 架构
+
+```
+你手动启动的（只有一个）
+        │
+┌─────────────────────────────────────────────┐
+│  manager（守护服务，8002）                    │
+│   起停控制 + 探活 + 自动重启 + 日志落文件      │
+└──────┬──────────────┬───────────────────────┘
+       │ 拉起/监控     │ 拉起/监控
+┌──────▼──────┐  ┌────▼────────┐   ┌─────────────┐
+│ kb-agent    │  │ ai-assistant│   │ 未来的 Agent │
+│ 8000  RAG   │  │ 8001  调度器 │   │ doc-review…  │
+└─────────────┘  └─────────────┘   └─────────────┘
+
+管理端 5174（服务管理页）
+     ├→ 8001 的 /api/v1/admin    ← 业务数据（统计、kb 管理，已有）
+     └→ 8002 的 /api/v1/services ← 进程控制（新增，直连不代理——
+                                    ai-assistant 挂了还得能重启它）
+```
+
+### 关键决策
+
+- **manager 是根进程**：唯一手动启动的服务，不被任何被管服务托管；它自己的常驻守护后续交操作系统（Linux systemd / Windows 任务计划），现阶段挂了手动拉起
+- **进程控制直连 8002**：不走 8001 代理（否则 ai-assistant 挂了无法重启它）
+- **跨平台**：启动命令用 `{python}` 占位符（manager 按系统解析为 `.venv\Scripts\python.exe` / `.venv/bin/python`），换操作系统 = 改配置不改代码；上 Linux 服务器后与 systemd 互补（systemd 管兜底，manager 管统一界面）
+- **探活**：httpx 请求各服务 `/docs`（FastAPI 自带，现有服务零改动）
+- **自动重启**：监控循环周期探活，进程死了自动拉起并计数；连续失败 5 次转 error 停止尝试（防端口冲突死循环）；手动 stop 的不自动拉起
+- **服务清单即配置**（`manager/services.json`）：名称/端口/目录/命令/是否随 manager 启动，新 Agent 接入加一行即可
+
+### 最小闭环范围
+
+首批管理 kb-agent 与 ai-assistant 两个 Python 服务；前端服务（Vite/nginx）同为进程，后续按需加进配置即可。
+
 ## 快速启动
 
-> 端口约定：kb-agent 8000、ai-assistant 8001、前端 5173，浏览器访问 http://localhost:5173
+> 端口约定：kb-agent 8000、ai-assistant 8001、manager 8002、聊天端 5173、管理端 5174；浏览器访问聊天端 http://localhost:5173、管理端 http://localhost:5174
 
 ### 1. 依赖安装（首次，每个项目各装一次）
 
@@ -83,8 +121,12 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 前端（Vite + Vue3）
+# 前端（Vite + Vue3，聊天端）
 cd ai-assistant\frontend
+npm install
+
+# 管理端前端（Vite + Vue3 + daisyUI，Agent 管理界面）
+cd ai-assistant\admin-frontend
 npm install
 ```
 
@@ -92,7 +134,18 @@ npm install
 
 kb-agent 和 ai-assistant 各有一份 `.env.example`，复制成 `.env` 并按注释填入密钥（两个项目的 LLM 配置相同；kb-agent 还需要 Embedding 配置，见它的 .env.example 注释）。
 
-### 3. 启动（日常，三个终端各跑一个）
+### 3. 启动（日常）
+
+**方式 A（推荐）：manager 一键拉起后端**
+
+```powershell
+cd manager
+.venv\Scripts\python.exe -m uvicorn main:app --port 8002
+```
+
+kb-agent 与 ai-assistant 会被自动拉起并持续守护（死了自动重启），详见「统一服务管理（manager）设计」；前端仍按下面两个终端启动。
+
+**方式 B：逐个手动启动（三个终端各跑一个）**
 
 ```powershell
 # 终端 1：kb-agent（企业知识问答）
@@ -106,6 +159,10 @@ cd ai-assistant
 # 终端 3：前端（聊天界面）
 cd ai-assistant\frontend
 npm run dev
+
+# 终端 4：管理端前端（Agent 管理界面，可选）
+cd ai-assistant\admin-frontend
+npm run dev
 ```
 
 kb-agent 没启动时 ai-assistant 也能用（知识问题自动降级为通用对话）。
@@ -113,6 +170,22 @@ kb-agent 没启动时 ai-assistant 也能用（知识问题自动降级为通用
 ## 更新日志
 
 > 历史备注：早期项目（tricore 系列：销售/库存/办公协同业务系统）已于 2026-08-25 归档至 `archived/`，不再维护。
+
+#### 2026年09月03日【企业AI助手·manager 守护服务与运维管理页】
+
+- **manager 服务建成**（8002，新目录 `manager/`）：项目唯一手动启动的根进程——按 `services.json` 配置拉起各服务（subprocess + 各服务自己 venv 的 `{python}` 占位符跨平台解析）、httpx 探活 `/docs`（现有服务零改动）、5 秒监控循环自动重启（连续失败 5 次转 error 防崩溃死循环）、手动 stop 的不被拉起、日志统一落 `manager/logs/`
+- **管理端新增「服务管理」页**：状态灯 / 运行时长 / 重启次数 + 起停/重启按钮 + 日志弹窗，5 秒轮询；进程控制走新代理 `/ops` → 8002 **直连**（不经 8001——ai-assistant 挂了还得能重启它）
+- 联调通过：manager 启动自动拉起两个服务；taskkill 杀掉 kb-agent 后 5 秒内自动重启（restarts 计数）；手动停止保持 stopped 不被拉起；日志接口正常；vite 代理链路验证通过
+- 设计要点记录于 README「统一服务管理（manager）设计」：根进程约束（manager 不能被被管服务托管）、跨平台配置、自守护问题（manager 自己的常驻后续交 systemd/任务计划，上 Linux 服务器后与 systemd 互补）
+
+#### 2026年09月01日【企业AI助手·管理界面v1：调用统计与kb管理页】
+
+- **前端拆分为两个项目**：聊天端（`frontend/`，5173，全体员工用）与管理端（`admin-frontend/`，5174，管理员用）分离——受众、权限、部署范围不同，各自独立演进；两者都只走 8001 代理
+- **admin-frontend 建成**（Vite 8 + Vue 3.5 + vue-router 5 + pinia 4 + Tailwind 4.3 + daisyUI 5.7 + lucide 图标）：侧边栏布局 + 4 条懒加载路由（总览 / 上传知识 / 知识列表 / 未命中问题）；Tailwind v4 CSS-first 配置（无 tailwind.config.js，style.css 里 @plugin daisyui）
+- **ai-assistant 建库（它的第一个数据库）**：SQLite assistant.db + calls 表——每次问答调用记一笔（意图 / 实际回答来源 / 是否降级 / 耗时），只有调度器有全链路视角；流式接口用生成器外层 try/finally 保证断流也落库
+- **管理接口 `/api/v1/admin`**：`/overview`（各 Agent 在线状态 + 调用统计：总次数 / 知识问答成功率 / 降级次数 / 平均耗时）、`/calls`（最近调用记录）；kb-agent 数据走代理模式（前端 → 8001 → 8000）：知识列表 / 删除 / 上传（multipart 透传）、未命中列表 / 删除 / 清空，kb-agent 不可用统一返回 502
+- 联调通过：真实问答成功记录调用（7177ms，无降级）；上传 → AI 识别分类 → 删除全链路验证，测试数据已清理
+- 补充说明：管理端「知识问答成功率」= kb-agent 接住数 / 知识类问题数；Agent 清单（含规划中）目前是硬编码列表，新 Agent 接入时再接到 registry
 
 #### 2026年08月31日【企业知识库Agent·检索质量与未命中记录】
 
