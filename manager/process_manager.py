@@ -4,6 +4,9 @@ manager 是唯一手动启动的根进程，其它服务都是它的子进程—
 它持有每个子进程的引用，所以只有它知道"谁在跑、谁死了"。
 """
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -17,12 +20,25 @@ import psutil
 ROOT = Path(__file__).resolve().parent.parent      # 项目根目录（manager/ 的上一级）
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")    # 终端颜色等控制序列（如 \x1b[32m）
+
 
 def resolve_python(cwd: Path) -> str:
     """{python} 占位符 → 各服务自己的 venv 解释器；跨平台差异只在这里做适配"""
     if sys.platform == "win32":
         return str(cwd / ".venv" / "Scripts" / "python.exe")
     return str(cwd / ".venv" / "bin" / "python")
+
+
+def resolve_npm() -> str:
+    """{npm} 占位符 → npm 可执行文件；Windows 上是 npm.cmd，which 拿到的带扩展名路径才能被 subprocess 执行"""
+    return shutil.which("npm") or "npm"
+
+
+def build_command(template: str, cwd: Path) -> list[str]:
+    """先按空格拆成 token，再按占位符精确替换——解析出的路径含空格（如 Program Files）也不会被拆坏"""
+    resolved = {"{python}": resolve_python(cwd), "{npm}": resolve_npm()}
+    return [resolved.get(token, token) for token in template.split()]
 
 
 class ProcessManager:
@@ -96,7 +112,9 @@ class ProcessManager:
         if not path.exists():
             return {"lines": [], "total": 0}
         content = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        return {"lines": content[-lines:], "total": len(content)}
+        # Vite 等工具即使输出没接终端也写 ANSI 颜色码，管理页 <pre> 里会显示成 [32m 之类的乱码，读取时清掉
+        cleaned = [ANSI_RE.sub("", line) for line in content]
+        return {"lines": cleaned[-lines:], "total": len(cleaned)}
 
     # ---------- 监控 ----------
 
@@ -144,16 +162,18 @@ class ProcessManager:
         self._kill_tree(svc)              # 先清残留进程，避免端口占用
         cfg = svc["config"]
         cwd = ROOT / cfg["cwd"]
-        command = cfg["command"].replace("{python}", resolve_python(cwd))
+        command = build_command(cfg["command"], cwd)
 
         kwargs = {}
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
         log_file = open(LOGS_DIR / f"{name}.log", "a", encoding="utf-8")
+        # Python 子进程输出没接终端时默认按系统编码（中文系统是 GBK）写文件，与 Node 的 UTF-8 混在一起会乱码，统一成 UTF-8
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         proc = subprocess.Popen(
-            command.split(), cwd=cwd,
-            stdout=log_file, stderr=subprocess.STDOUT, **kwargs,
+            command, cwd=cwd,
+            stdout=log_file, stderr=subprocess.STDOUT, env=env, **kwargs,
         )
         log_file.close()                  # 子进程持有自己的句柄，父进程这头可以关掉
 
@@ -179,9 +199,10 @@ class ProcessManager:
 
     def _probe(self, name: str) -> bool:
         # 嗅探探针，通过发起请求，判断是否服务返回响应，来判断服务是否存活
-        port = self.services[name]["config"]["port"]
+        cfg = self.services[name]["config"]
+        path = cfg.get("probe_path", "/docs")   # 默认探 FastAPI 的 /docs；Vite 前端配 "/"
         try:
-            resp = httpx.get(f"http://127.0.0.1:{port}/docs", timeout=self.probe_timeout)
+            resp = httpx.get(f"http://127.0.0.1:{cfg['port']}{path}", timeout=self.probe_timeout)
             return resp.status_code < 500    # 只要服务有响应就算活着
         except httpx.HTTPError:
             return False

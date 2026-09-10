@@ -31,9 +31,11 @@ pip install -r requirements.txt
 往 `services.json` 的 services 数组加一项即可，**无需改代码**：
 
 ```json
-{ "name": "doc-review-agent", "port": 8003, "cwd": "doc-review-agent", "command": "{python} -m uvicorn main:app --port 8003", "auto_start": true }
+{ "name": "doc-review-agent", "port": 8003, "cwd": "doc-review-agent", "command": "{python} -m uvicorn main:app --port 8003", "probe_path": "/docs", "auto_start": true }
 ```
 
 - `{python}` 会被解析为该服务自己目录下的 venv 解释器（Windows/Linux 自动适配）
-- 前端服务（Vite/nginx）同样是进程，照此加配置即可管理
-- 日志落在 `manager/logs/{name}.log`
+- `{npm}` 会被解析为 npm 可执行文件（Windows 上是 npm.cmd，shutil.which 找真实路径）
+- `probe_path` 探活路径：后端 FastAPI 用 `/docs`，Vite 前端用 `/`（默认 /docs）
+- 前端服务（Vite/nginx）同样是进程，已纳入管理：`frontend` 5173、`admin-frontend` 5174
+- 日志落在 `manager/logs/{name}.log`（Python 子进程输出统一 UTF-8 编码；读取接口自动清理 Vite 等工具的 ANSI 颜色码）

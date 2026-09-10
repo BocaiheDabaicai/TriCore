@@ -12,6 +12,7 @@
 | `doc-review-agent` | 企业项目文档审查 | 审查合同、方案、报告，指出问题与风险 | 规划中 |
 | `data-analysis-agent` | 企业数据分析 | 基于业务数据查询、统计、分析与归纳 | 规划中 |
 | `notice-agent` | 企业通知助手 | 通知起草、优化、发布与送达管理 | 规划中 |
+| `study-agent` | 研读库（个人向） | 论文/课程的精读·泛读笔记、阅读记录与统计（面向本人的论文写作练习） | 建设中：前端已搭好（静态数据），后端骨架 |
 | `archived` | 早期项目归档 | tricore 业务系统等（仅纪念留存） | 已归档 |
 
 ## 统一调度设计
@@ -76,12 +77,12 @@ ai-assistant（统一AI助手服务：调度器 + 统一问答接口）
 ┌─────────────────────────────────────────────┐
 │  manager（守护服务，8002）                    │
 │   起停控制 + 探活 + 自动重启 + 日志落文件      │
-└──────┬──────────────┬───────────────────────┘
-       │ 拉起/监控     │ 拉起/监控
-┌──────▼──────┐  ┌────▼────────┐   ┌─────────────┐
-│ kb-agent    │  │ ai-assistant│   │ 未来的 Agent │
-│ 8000  RAG   │  │ 8001  调度器 │   │ doc-review…  │
-└─────────────┘  └─────────────┘   └─────────────┘
+└──────┬──────────────┬───────────────┬───────┘
+       │ 拉起/监控     │               │
+┌──────▼──────┐  ┌────▼────────┐  ┌───▼─────────────┐
+│ kb-agent    │  │ ai-assistant│  │ 前端（Vite dev）  │
+│ 8000  RAG   │  │ 8001  调度器 │  │ 聊天 5173/管理 5174│
+└─────────────┘  └─────────────┘  └─────────────────┘
 
 管理端 5174（服务管理页）
      ├→ 8001 的 /api/v1/admin    ← 业务数据（统计、kb 管理，已有）
@@ -93,18 +94,18 @@ ai-assistant（统一AI助手服务：调度器 + 统一问答接口）
 
 - **manager 是根进程**：唯一手动启动的服务，不被任何被管服务托管；它自己的常驻守护后续交操作系统（Linux systemd / Windows 任务计划），现阶段挂了手动拉起
 - **进程控制直连 8002**：不走 8001 代理（否则 ai-assistant 挂了无法重启它）
-- **跨平台**：启动命令用 `{python}` 占位符（manager 按系统解析为 `.venv\Scripts\python.exe` / `.venv/bin/python`），换操作系统 = 改配置不改代码；上 Linux 服务器后与 systemd 互补（systemd 管兜底，manager 管统一界面）
-- **探活**：httpx 请求各服务 `/docs`（FastAPI 自带，现有服务零改动）
+- **跨平台**：启动命令用 `{python}` / `{npm}` 占位符（manager 按系统解析为 `.venv\Scripts\python.exe`、`npm.cmd` 等真实路径），换操作系统 = 改配置不改代码；上 Linux 服务器后与 systemd 互补（systemd 管兜底，manager 管统一界面）
+- **探活**：httpx 请求各服务的探活路径（配置项 `probe_path`——后端 FastAPI 用 `/docs` 零改动，Vite 前端用 `/`）
 - **自动重启**：监控循环周期探活，进程死了自动拉起并计数；连续失败 5 次转 error 停止尝试（防端口冲突死循环）；手动 stop 的不自动拉起
-- **服务清单即配置**（`manager/services.json`）：名称/端口/目录/命令/是否随 manager 启动，新 Agent 接入加一行即可
+- **服务清单即配置**（`manager/services.json`）：名称/端口/目录/命令/探活路径/是否随 manager 启动，新 Agent 接入加一行即可
 
-### 最小闭环范围
+### 管理范围（2026-09-10 扩大至四个进程）
 
-首批管理 kb-agent 与 ai-assistant 两个 Python 服务；前端服务（Vite/nginx）同为进程，后续按需加进配置即可。
+kb-agent、ai-assistant、聊天端 5173、管理端 5174（Vite dev server 配 `probe_path: "/"`；`vite.config.js` 加 `strictPort: true`——端口被占直接报错，不自动换端口，否则 manager 按固定端口探活会"失联"；`host: '127.0.0.1'`——Vite 默认只绑 IPv6 的 localhost（[::1]），manager 探 IPv4 的 127.0.0.1 会连不上，实测踩坑后固定 IPv4 与后端一致）；生产环境前端（nginx）同为进程，照配置加一条即可。
 
 ## 快速启动
 
-> 端口约定：kb-agent 8000、ai-assistant 8001、manager 8002、聊天端 5173、管理端 5174；浏览器访问聊天端 http://localhost:5173、管理端 http://localhost:5174
+> 端口约定：kb-agent 8000、ai-assistant 8001、manager 8002、聊天端 5173、管理端 5174、研读端 5175（研读库后端 8003）；浏览器访问聊天端 http://localhost:5173、管理端 http://localhost:5174、研读端 http://localhost:5175
 
 ### 1. 依赖安装（首次，每个项目各装一次）
 
@@ -136,16 +137,16 @@ kb-agent 和 ai-assistant 各有一份 `.env.example`，复制成 `.env` 并按�
 
 ### 3. 启动（日常）
 
-**方式 A（推荐）：manager 一键拉起后端**
+**方式 A（推荐）：manager 一键拉起全部服务**
 
 ```powershell
 cd manager
 .venv\Scripts\python.exe -m uvicorn main:app --port 8002
 ```
 
-kb-agent 与 ai-assistant 会被自动拉起并持续守护（死了自动重启），详见「统一服务管理（manager）设计」；前端仍按下面两个终端启动。
+kb-agent、ai-assistant 与两个前端（5173/5174）都会被自动拉起并持续守护（死了自动重启），日常只需手动启动 manager 一个进程；详见「统一服务管理（manager）设计」。（研读库 study-agent 开发中，暂独立运行，后端就绪后再接入 manager。）
 
-**方式 B：逐个手动启动（三个终端各跑一个）**
+**方式 B：逐个手动启动（四个终端各跑一个）**
 
 ```powershell
 # 终端 1：kb-agent（企业知识问答）
@@ -170,6 +171,17 @@ kb-agent 没启动时 ai-assistant 也能用（知识问题自动降级为通用
 ## 更新日志
 
 > 历史备注：早期项目（tricore 系列：销售/库存/办公协同业务系统）已于 2026-08-25 归档至 `archived/`，不再维护。
+
+#### 2026年09月10日【manager 扩展四进程管理 + 研读库（study-agent）立项与前端搭建】
+
+- **manager 扩展：前端服务纳入统一管理（四进程）**：`services.json` 新增 frontend（5173）/ admin-frontend（5174）；新增 `{npm}` 占位符（Windows 上是 npm.cmd，用 which 取真实路径）；命令拼接改为"先拆 token 再替换占位符"（解析出的路径含空格也不会被拆坏）；新增 `probe_path` 探活路径配置（后端 `/docs`，Vite 用 `/`）
+- **Vite 固定绑定踩坑**：Vite 默认只绑 IPv6 的 localhost（`[::1]`），manager 按 IPv4 探活连不上 → 判死并反复重启；修复：`vite.config.js` 加 `host: '127.0.0.1'` + `strictPort: true`（端口被占直接报错，不自动漂移）
+- **日志乱码修复**：Vite 输出重定向到文件后仍写 ANSI 颜色码，管理页 `<pre>` 里显示成乱码 → manager 读取日志时清除 ANSI；Python 子进程输出默认按系统 GBK 编码、与 Node 的 UTF-8 混写 → spawn 时统一 `PYTHONIOENCODING=utf-8`
+- **研读库立项（`study-agent/`，个人向）**：精读 + 泛读论文/课程的结构化笔记与阅读管理（服务于毕业论文写作练习）；独立成项目而非 kb-agent 加类型——数据模型本质不同（结构化阅读管理 vs 文档分块问答），未来可接入调度器成为集群 Agent
+- **前端已搭好（5175，静态数据）**：Vite 8 + Vue3 + daisyUI + pinia + axios + vue-router（与 admin-frontend 同版本）。研读页：左上传占位（PDF/图片下一步接入）+ 右笔记（CodeMirror 6 Markdown 编辑器：实时语法着色、Tab 缩进）+ 选填文献行（作者/出版时间/期刊）+ 底部实时时钟（年月日/星期/秒）+ 泛读模式左栏收起、笔记居中的过渡动画。回顾页：搜索 + 精读/泛读筛选（左栏、吸顶跟随）+ 右下角悬停展开的统计卡（条目/精读泛读/完成度进度条/累计与平均字数/本月新增/最近更新）。详情页：Markdown 渲染（marked）
+- **数据层静态模拟先行**：`frontend/src/api/readings.js` 返回与真实接口同形状的静态数据（`{message, data}` + 字段一致），后端就绪后只改这一个文件（用户拍板顺序：先定前端 → 再定接口 → 再定表）；记录字段约定：title / mode（close,skim）/ status（draft,done）/ author / published / journal / note / 时间戳
+- **后端骨架（8003）**：应用入口 + SQLite 配置 + readings 模型已建；接口留到"构建后端"阶段
+- **出版时间控件探索记录**：原生 month → Vanilla Calendar Pro → Cally（选年月不便）→ 回 VCPro → 最终定为普通文本框手填——结论：个人工具优先简单可靠的输入方式
 
 #### 2026年09月03日【企业AI助手·manager 守护服务与运维管理页】
 
