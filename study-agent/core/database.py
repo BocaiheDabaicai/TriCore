@@ -18,3 +18,12 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False)
 # 所有 ORM 模型的基类：模型类继承它，create_all 就能扫描到并建表
 class Base(DeclarativeBase):
     pass
+
+
+def get_db():
+    """FastAPI 依赖：每个请求拿一个数据库会话，用完自动关掉"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

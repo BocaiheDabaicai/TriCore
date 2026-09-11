@@ -5,6 +5,8 @@ const routes = [
   { path: '/', name: 'study', component: () => import('../views/StudyView.vue'), meta: { title: '研读' } },
   { path: '/review', name: 'review', component: () => import('../views/ReviewView.vue'), meta: { title: '回顾' } },
   { path: '/review/:id', name: 'review-detail', component: () => import('../views/ReviewDetailView.vue'), meta: { title: '笔记详情' } },
+  { path: '/sources', name: 'sources', component: () => import('../views/SourcesView.vue'), meta: { title: '寻文' } },
+  { path: '/edit/:id', name: 'study-edit', component: () => import('../views/StudyView.vue'), meta: { title: '修改笔记' } },
 ]
 
 const router = createRouter({

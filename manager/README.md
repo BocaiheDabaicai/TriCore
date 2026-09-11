@@ -31,11 +31,12 @@ pip install -r requirements.txt
 往 `services.json` 的 services 数组加一项即可，**无需改代码**：
 
 ```json
-{ "name": "doc-review-agent", "port": 8003, "cwd": "doc-review-agent", "command": "{python} -m uvicorn main:app --port 8003", "probe_path": "/docs", "auto_start": true }
+{ "name": "doc-review-agent", "port": 8003, "cwd": "doc-review-agent", "command": "{python} -m uvicorn main:app --port 8003", "probe_path": "/docs", "auto_start": true, "cn_name": "文档审查", "desc": "企业文档审查：查合同、方案、报告的风险", "enter_url": "http://127.0.0.1:8003/docs" }
 ```
 
 - `{python}` 会被解析为该服务自己目录下的 venv 解释器（Windows/Linux 自动适配）
 - `{npm}` 会被解析为 npm 可执行文件（Windows 上是 npm.cmd，shutil.which 找真实路径）
 - `probe_path` 探活路径：后端 FastAPI 用 `/docs`，Vite 前端用 `/`（默认 /docs）
+- `cn_name` / `enter_url`：管理页展示用——中文名 + "进入"链接（后端填 `http://127.0.0.1:{port}/docs`，前端填站点根地址）；服务运行中才会亮起可点。`desc`（简介）字段保留备用、暂不展示
 - 前端服务（Vite/nginx）同样是进程，已纳入管理：`frontend` 5173、`admin-frontend` 5174
 - 日志落在 `manager/logs/{name}.log`（Python 子进程输出统一 UTF-8 编码；读取接口自动清理 Vite 等工具的 ANSI 颜色码）

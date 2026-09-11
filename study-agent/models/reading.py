@@ -1,5 +1,5 @@
 # 研读记录表 —— 一条记录 = 一次研读（精读 / 泛读）的过程与成果
-# 最小单元只有基础字段；精读模板字段、附件（PDF/截图）下一步加
+# 字段与前端数据层（frontend/src/api/readings.js）的契约一一对应
 
 from datetime import datetime
 
@@ -18,12 +18,19 @@ class Reading(Base):
     # 阅读模式：close 精读 / skim 泛读
     mode: Mapped[str] = mapped_column(String(20), default="close")
 
-    # 状态：draft 草稿（还在写）/ done 完成
-    # "一点一点写"意味着记录长期处于草稿态，多次保存，最后标记完成
-    status: Mapped[str] = mapped_column(String(20), default="draft")
+    # 分类标签（选填，自创或复用已有）
+    tag: Mapped[str] = mapped_column(String(50), default="")
+
+    # 文献信息（选填）：作者 / 出版时间（手填 YYYY-MM）/ 期刊
+    author: Mapped[str] = mapped_column(String(200), default="")
+    published: Mapped[str] = mapped_column(String(20), default="")
+    journal: Mapped[str] = mapped_column(String(200), default="")
 
     # 笔记正文（Markdown 文本）
     note: Mapped[str] = mapped_column(Text, default="")
+
+    # 论文文件名（精读，上传后写入；原文件在 uploads/ 目录，命名 {id}_{文件名}）
+    attachment: Mapped[str] = mapped_column(String(300), default="")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)

@@ -99,6 +99,7 @@ onUnmounted(() => clearInterval(timer))
             <thead>
               <tr>
                 <th>服务</th>
+                <th>中文名</th>
                 <th>端口</th>
                 <th>状态</th>
                 <th>PID</th>
@@ -110,6 +111,7 @@ onUnmounted(() => clearInterval(timer))
             <tbody>
               <tr v-for="s in services" :key="s.name">
                 <td class="font-medium">{{ s.name }}</td>
+                <td class="text-xs text-base-content/60">{{ s.cn_name || '—' }}</td>
                 <td class="font-mono text-xs">{{ s.port }}</td>
                 <td>
                   <span class="badge badge-sm" :class="STATUS_META[s.status]?.badge">
@@ -121,6 +123,17 @@ onUnmounted(() => clearInterval(timer))
                 <td class="text-xs">{{ s.restarts }}</td>
                 <td>
                   <div class="flex gap-1">
+                    <a
+                      v-if="s.status === 'running' && s.enter_url"
+                      class="btn btn-xs btn-outline btn-primary"
+                      :href="s.enter_url"
+                      target="_blank"
+                      rel="noopener"
+                      :title="`打开 ${s.enter_url}`"
+                    >
+                      进入
+                    </a>
+                    <button v-else class="btn btn-xs btn-outline" disabled title="服务运行中才能进入">进入</button>
                     <button
                       class="btn btn-xs"
                       :disabled="busy === s.name || s.status === 'running' || s.status === 'starting'"
@@ -144,7 +157,7 @@ onUnmounted(() => clearInterval(timer))
                 </td>
               </tr>
               <tr v-if="!services.length">
-                <td colspan="7" class="text-center text-base-content/40 py-8">manager 未返回服务列表</td>
+                <td colspan="8" class="text-center text-base-content/40 py-8">manager 未返回服务列表</td>
               </tr>
             </tbody>
           </table>

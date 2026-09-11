@@ -21,6 +21,12 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/ops/, ''),
       },
+      // 研读库数据（只读统计，数据视图用）：独立体系，直连研读后端（8003）
+      '/study': {
+        target: 'http://localhost:8003',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/study/, '/api'),
+      },
     },
   },
 })

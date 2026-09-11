@@ -10,7 +10,10 @@
       "cwd": "kb-agent",
       "command": "{python} -m uvicorn main:app --port 8000",
       "probe_path": "/docs",
-      "auto_start": true
+      "auto_start": true,
+      "cn_name": "知识库",
+      "desc": "企业知识问答：制度查询、文档问答、流程助手",
+      "enter_url": "http://127.0.0.1:8000/docs"
     },
     {
       "name": "ai-assistant",
@@ -18,7 +21,10 @@
       "cwd": "ai-assistant",
       "command": "{python} -m uvicorn main:app --port 8001",
       "probe_path": "/docs",
-      "auto_start": true
+      "auto_start": true,
+      "cn_name": "调度器",
+      "desc": "统一AI助手：意图识别、路由分发、结果汇总",
+      "enter_url": "http://127.0.0.1:8001/docs"
     },
     {
       "name": "frontend",
@@ -26,7 +32,10 @@
       "cwd": "ai-assistant/frontend",
       "command": "{npm} run dev",
       "probe_path": "/",
-      "auto_start": true
+      "auto_start": true,
+      "cn_name": "聊天端",
+      "desc": "员工聊天端：统一问答入口，流式对话展示",
+      "enter_url": "http://127.0.0.1:5173/"
     },
     {
       "name": "admin-frontend",
@@ -34,7 +43,32 @@
       "cwd": "ai-assistant/admin-frontend",
       "command": "{npm} run dev",
       "probe_path": "/",
-      "auto_start": true
+      "auto_start": true,
+      "cn_name": "管理端",
+      "desc": "管理端：调用统计、知识管理、服务管理",
+      "enter_url": "http://127.0.0.1:5174/"
+    },
+    {
+      "name": "study-agent",
+      "port": 8003,
+      "cwd": "study-agent",
+      "command": "{python} -m uvicorn main:app --port 8003",
+      "probe_path": "/docs",
+      "auto_start": true,
+      "cn_name": "研读后端",
+      "desc": "研读库后端：研读记录与文献站点接口",
+      "enter_url": "http://127.0.0.1:8003/docs"
+    },
+    {
+      "name": "study-frontend",
+      "port": 5175,
+      "cwd": "study-agent/frontend",
+      "command": "{npm} run dev",
+      "probe_path": "/",
+      "auto_start": true,
+      "cn_name": "研读端",
+      "desc": "研读库前端：论文精读泛读笔记与回顾",
+      "enter_url": "http://127.0.0.1:5175/"
     }
   ]
 }

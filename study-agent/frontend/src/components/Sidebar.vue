@@ -1,6 +1,6 @@
 <script setup>
 import { useRoute } from 'vue-router'
-import { BookOpen, LibraryBig, PenLine } from 'lucide-vue-next'
+import { BookOpen, Compass, LibraryBig, PenLine } from 'lucide-vue-next'
 
 // 研读库侧栏：收起是一条 48px 的"图标轨道"（图标常驻可见），鼠标悬停滑出导航文字
 const route = useRoute()
@@ -8,6 +8,7 @@ const route = useRoute()
 const LINKS = [
   { to: '/', label: '研读', icon: PenLine },
   { to: '/review', label: '回顾', icon: LibraryBig },
+  { to: '/sources', label: '寻文', icon: Compass },
 ]
 
 // 高亮当前页：'/' 要精确匹配，其它按前缀（这样 /review/3 详情页也能让"回顾"保持高亮）

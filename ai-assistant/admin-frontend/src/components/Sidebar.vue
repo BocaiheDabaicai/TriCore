@@ -1,6 +1,6 @@
 <script setup>
 import { useRoute } from 'vue-router'
-import { LayoutDashboard, Upload, LibraryBig, Inbox, Server } from 'lucide-vue-next'
+import { LayoutDashboard, Upload, LibraryBig, Inbox, Server, Network } from 'lucide-vue-next'
 
 // 侧边栏菜单配置（扁平数组，type 区分导航项/分组标题）
 // 以后接入新 Agent（doc-review 等）的管理页时，往这里加几行即可
@@ -8,6 +8,7 @@ const MENUS = [
   { type: 'link', path: '/', label: '总览', icon: LayoutDashboard },
   { type: 'title', label: '运维（manager）' },
   { type: 'link', path: '/services', label: '服务管理', icon: Server },
+  { type: 'link', path: '/architecture', label: '架构图', icon: Network },
   { type: 'title', label: '知识库（kb-agent）' },
   { type: 'link', path: '/kb/upload', label: '上传知识', icon: Upload },
   { type: 'link', path: '/kb/list', label: '知识列表', icon: LibraryBig },

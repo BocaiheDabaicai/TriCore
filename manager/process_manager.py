@@ -235,6 +235,10 @@ class ProcessManager:
             "status": svc["status"],
             "auto_start": svc["config"].get("auto_start", False),
             "restarts": svc["restarts"],
+            # 管理页展示用：中文名 + 简介（悬停提示）+ 进入地址（都配在 services.json 里）
+            "cn_name": svc["config"].get("cn_name", ""),
+            "desc": svc["config"].get("desc", ""),
+            "enter_url": svc["config"].get("enter_url", ""),
         }
         if self._alive(svc) and svc["started_at"]:
             item["pid"] = svc["proc"].pid
