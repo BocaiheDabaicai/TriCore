@@ -1,6 +1,9 @@
 <script setup>
 import { ref } from 'vue'
 import { uploadKnowledge } from '../../api/kb'
+import { errText } from '../../utils/error'
+import { KIND_LABELS } from '../../utils/meta'
+import PageHeader from '../../components/PageHeader.vue'
 
 // 上传知识页：文件 → 解析 → AI 识别分类 → 入库 → 自动向量化（经调度器代理转发 kb-agent）
 const fileInput = ref(null)
@@ -10,11 +13,10 @@ const category = ref('')    // 业务分类，不填则由 AI 拟定
 const uploading = ref(false)
 const result = ref(null)    // { ok, text }
 
+// 类型下拉：首项"自动识别" + 中文名映射统一来自 utils/meta
 const KINDS = [
   { value: '', label: '自动识别' },
-  { value: 'policy', label: '制度' },
-  { value: 'document', label: '文档' },
-  { value: 'workflow', label: '流程' },
+  ...Object.entries(KIND_LABELS).map(([value, label]) => ({ value, label })),
 ]
 
 function onFile(e) {
@@ -36,7 +38,7 @@ async function upload() {
       result.value = { ok: false, text: resp.message }
     }
   } catch (e) {
-    result.value = { ok: false, text: '上传失败：' + (e.response?.data?.detail || e.message) }
+    result.value = { ok: false, text: '上传失败：' + errText(e) }
   } finally {
     uploading.value = false
   }
@@ -45,10 +47,7 @@ async function upload() {
 
 <template>
   <div class="p-6 space-y-6">
-    <div>
-      <h1 class="text-2xl font-bold">上传知识</h1>
-      <p class="text-sm text-base-content/60 mt-1">文件上传后自动解析、识别分类、入库并向量化，立即可问答</p>
-    </div>
+    <PageHeader title="上传知识" desc="文件上传后自动解析、识别分类、入库并向量化，立即可问答" />
 
     <div class="card bg-base-100 shadow">
       <div class="card-body gap-4">

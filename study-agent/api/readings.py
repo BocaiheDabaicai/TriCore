@@ -28,6 +28,8 @@ def _row_dict(r: Reading) -> dict:
         "title": r.title,
         "mode": r.mode,
         "tag": r.tag,
+        "rating": r.rating or 0,
+        "domains": r.domains or [],
         "author": r.author,
         "published": r.published,
         "journal": r.journal,
@@ -38,10 +40,27 @@ def _row_dict(r: Reading) -> dict:
     }
 
 
+def _clean_rating(value) -> int:
+    # 评分只收 0-10 的整数，超出范围夹回来
+    return max(0, min(10, int(value or 0)))
+
+
+def _clean_domains(domains) -> list[str]:
+    # 去空白、去重、最多 3 个
+    out: list[str] = []
+    for d in domains or []:
+        d = str(d).strip()
+        if d and d not in out:
+            out.append(d)
+    return out[:3]
+
+
 class ReadingCreate(BaseModel):
     title: str = ""
     mode: str = "close"
     tag: str = ""
+    rating: int = 0
+    domains: list[str] = []
     author: str = ""
     published: str = ""
     journal: str = ""
@@ -52,6 +71,8 @@ class ReadingUpdate(BaseModel):
     title: str | None = None
     mode: str | None = None
     tag: str | None = None
+    rating: int | None = None
+    domains: list[str] | None = None
     author: str | None = None
     published: str | None = None
     journal: str | None = None
@@ -80,6 +101,8 @@ def create_reading(payload: ReadingCreate, db: Session = Depends(get_db)):
         title=payload.title.strip() or "未命名文献",
         mode=payload.mode,
         tag=payload.tag.strip(),
+        rating=_clean_rating(payload.rating),
+        domains=_clean_domains(payload.domains),
         author=payload.author.strip(),
         published=payload.published.strip(),
         journal=payload.journal.strip(),
@@ -96,7 +119,12 @@ def update_reading(reading_id: int, payload: ReadingUpdate, db: Session = Depend
     row = db.get(Reading, reading_id)
     if not row:
         return {"message": "记录不存在", "data": None}
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("rating") is not None:
+        data["rating"] = _clean_rating(data["rating"])
+    if data.get("domains") is not None:
+        data["domains"] = _clean_domains(data["domains"])
+    for field, value in data.items():
         setattr(row, field, value)
     db.commit()
     db.refresh(row)

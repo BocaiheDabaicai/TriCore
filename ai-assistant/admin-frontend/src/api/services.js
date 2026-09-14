@@ -1,16 +1,9 @@
-import axios from 'axios'
+import { createClient } from './client'
 
 // 服务管理接口 —— 走 /ops 代理直连 manager（8002）
 // 进程控制不能经 ai-assistant 转发：ai-assistant 挂了还得能重启它
-const request = axios.create({
-  baseURL: '/ops/api/v1',
-  timeout: 60000,   // 启动/停止要拉起进程，比普通请求慢
-})
-
-request.interceptors.response.use(
-  (resp) => resp.data,
-  (err) => Promise.reject(err),
-)
+// 60 秒超时：启动/停止要拉起进程，比普通请求慢
+const request = createClient('/ops/api/v1', 60000)
 
 export function getServices() {
   return request.get('/services')

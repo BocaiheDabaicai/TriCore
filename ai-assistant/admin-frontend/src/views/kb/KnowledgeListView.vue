@@ -1,15 +1,20 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { deleteKnowledge, listKnowledge } from '../../api/kb'
+import { errText } from '../../utils/error'
+import { KIND_LABELS } from '../../utils/meta'
+import PageHeader from '../../components/PageHeader.vue'
 
 // 知识列表页：知识库内容管理（筛选 / 删除，经调度器代理转发 kb-agent）
-const KIND_LABELS = { policy: '制度', document: '文档', workflow: '流程' }
 
 const items = ref([])
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
 const filters = reactive({ keyword: '', kind: '', category: '' })
+
+// 页头说明带总数，随筛选结果变化
+const desc = computed(() => `知识库内容管理：筛选、删除（共 ${total.value} 条）`)
 
 async function load() {
   loading.value = true
@@ -19,7 +24,7 @@ async function load() {
     items.value = resp.data
     total.value = resp.total
   } catch (e) {
-    error.value = '加载失败：' + (e.response?.data?.detail || e.message)
+    error.value = '加载失败：' + errText(e)
   } finally {
     loading.value = false
   }
@@ -38,7 +43,7 @@ async function remove(item) {
     await deleteKnowledge(item.id)
     load()
   } catch (e) {
-    alert('删除失败：' + (e.response?.data?.detail || e.message))
+    alert('删除失败：' + errText(e))
   }
 }
 
@@ -47,10 +52,7 @@ onMounted(load)
 
 <template>
   <div class="p-6 space-y-6">
-    <div>
-      <h1 class="text-2xl font-bold">知识列表</h1>
-      <p class="text-sm text-base-content/60 mt-1">知识库内容管理：筛选、删除（共 {{ total }} 条）</p>
-    </div>
+    <PageHeader title="知识列表" :desc="desc" />
 
     <div class="card bg-base-100 shadow">
       <div class="card-body">
@@ -59,9 +61,7 @@ onMounted(load)
           <input v-model="filters.keyword" class="input input-bordered input-sm w-56" placeholder="标题/内容关键字" @keyup.enter="load" />
           <select v-model="filters.kind" class="select select-bordered select-sm">
             <option value="">全部类型</option>
-            <option value="policy">制度</option>
-            <option value="document">文档</option>
-            <option value="workflow">流程</option>
+            <option v-for="(label, value) in KIND_LABELS" :key="value" :value="value">{{ label }}</option>
           </select>
           <input v-model="filters.category" class="input input-bordered input-sm w-40" placeholder="分类精确匹配" @keyup.enter="load" />
           <button class="btn btn-primary btn-sm" :disabled="loading" @click="load">

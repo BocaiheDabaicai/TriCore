@@ -1,11 +1,12 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, Paperclip, Pencil, Trash2 } from 'lucide-vue-next'
+import { ArrowLeft, Paperclip, Pencil, Plus, Trash2, X } from 'lucide-vue-next'
 import { marked } from 'marked'
-import { deleteReading, getReading } from '../api/readings'
+import { deleteReading, getReading, listReadings, updateReading } from '../api/readings'
 import { useToastStore } from '../stores/toast'
 import { MODE_META } from '../utils/reading'
+import StarRating from '../components/StarRating.vue'
 
 // 笔记详情：从回顾页点进来查看；「修改」把内容带入研读界面继续写；「删除」带确认弹窗
 const route = useRoute()
@@ -17,6 +18,12 @@ const loading = ref(true)
 
 const deleteDialog = ref(null)
 const deleting = ref(false)
+
+// 评分 / 小领域：详情页直接改，改完马上保存
+const domainOptions = ref([])     // 领域候选：从全部记录里收集
+const domainOpen = ref(false)     // 添加领域的输入框显隐
+const domainInput = ref('')
+const domainInputEl = ref(null)
 
 async function doDelete() {
   if (deleting.value) return
@@ -38,7 +45,60 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+  // 领域候选：从全部记录里收集（拉不到就退化成只能手输自创，不影响页面）
+  try {
+    const all = (await listReadings()).data
+    domainOptions.value = [...new Set(all.flatMap((r) => r.domains || []))]
+  } catch {}
 })
+
+// ---- 评分：星级交互在 StarRating 组件里（含"再点同一颗 = 取消"），这里只管保存 ----
+async function setRating(value) {
+  await savePartial({ rating: value })
+}
+
+// ---- 小领域：最多 3 个，可输入自创或选已有 ----
+const domainSuggestions = computed(() => {
+  const kw = domainInput.value.trim().toLowerCase()
+  return domainOptions.value.filter(
+    (d) => !item.value?.domains?.includes(d) && (!kw || d.toLowerCase().includes(kw)),
+  )
+})
+
+function openDomainInput() {
+  domainOpen.value = true
+  domainInput.value = ''
+  nextTick(() => domainInputEl.value?.focus())
+}
+
+function closeDomainInput() {
+  domainOpen.value = false
+  domainInput.value = ''
+}
+
+async function addDomain(name) {
+  const d = (name ?? domainInput.value).trim()
+  if (!d || item.value.domains.length >= 3 || item.value.domains.includes(d)) {
+    closeDomainInput()
+    return
+  }
+  await savePartial({ domains: [...item.value.domains, d] })
+  closeDomainInput()
+}
+
+async function removeDomain(name) {
+  await savePartial({ domains: item.value.domains.filter((d) => d !== name) })
+}
+
+// 局部保存：只发变化的字段，成功用返回值刷新页面数据，失败保持原样
+async function savePartial(payload) {
+  try {
+    const res = await updateReading(item.value.id, payload)
+    item.value = res.data
+  } catch {
+    toast.error('保存失败，请重试')
+  }
+}
 
 // 笔记按 Markdown 渲染（marked 把 md 文本转成 HTML）
 const renderedNote = computed(() => (item.value?.note ? marked.parse(item.value.note) : ''))
@@ -78,6 +138,60 @@ const metaText = computed(() =>
           <span class="text-xs text-base-content/50 ml-2">
             创建 {{ item.created_at }} · 更新 {{ item.updated_at }}
           </span>
+        </div>
+
+        <!-- 评分 + 小领域：在这个页面直接改，改完即存 -->
+        <div class="flex flex-wrap items-center gap-x-6 gap-y-2 mt-3">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-base-content/40 shrink-0">评分</span>
+            <StarRating :value="item.rating" interactive @change="setRating" />
+          </div>
+
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="text-xs text-base-content/40 shrink-0">领域</span>
+            <span v-for="d in item.domains" :key="d" class="badge badge-sm badge-outline gap-1">
+              {{ d }}
+              <button class="hover:text-error cursor-pointer" title="移除" @click="removeDomain(d)">
+                <X class="w-3 h-3" />
+              </button>
+            </span>
+
+            <button
+              v-if="item.domains.length < 3 && !domainOpen"
+              type="button"
+              class="badge badge-sm badge-dash text-base-content/50 hover:text-base-content cursor-pointer"
+              title="添加小领域（最多 3 个）"
+              @click="openDomainInput"
+            >
+              <Plus class="w-3 h-3" />
+            </button>
+
+            <!-- 添加输入框：输入后回车自创，或从候选里选已有 -->
+            <div v-if="domainOpen" class="relative">
+              <input
+                ref="domainInputEl"
+                v-model="domainInput"
+                class="input input-xs w-40"
+                placeholder="输入后回车创建"
+                @keydown.enter="addDomain()"
+                @keydown.esc="closeDomainInput"
+                @blur="closeDomainInput"
+              />
+              <div
+                v-if="domainSuggestions.length"
+                class="absolute z-30 left-0 top-full mt-1 w-44 rounded-xl bg-base-100 border border-base-300 shadow-lg p-1 max-h-44 overflow-auto"
+              >
+                <button
+                  v-for="d in domainSuggestions"
+                  :key="d"
+                  class="block w-full text-left px-2.5 py-1.5 rounded-lg text-sm hover:bg-base-200 cursor-pointer"
+                  @mousedown.prevent="addDomain(d)"
+                >
+                  {{ d }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="divider my-2"></div>

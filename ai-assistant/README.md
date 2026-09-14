@@ -37,7 +37,7 @@ ai-assistant（统一AI助手服务：意图识别 + 路由 + 汇总）
 
 ### Agent 管理界面（v1 已实现，2026-09-01）
 
-- **独立管理端前端** `admin-frontend/`（5174 端口）：与聊天端分离（受众、权限、部署范围不同）；侧边栏 4 条路由（总览 / 上传知识 / 知识列表 / 未命中问题），Vite 8 + Vue3 + vue-router 5 + pinia 4 + Tailwind 4 + daisyUI 5
+- **独立管理端前端** `admin-frontend/`（5174 端口）：与聊天端分离（受众、权限、部署范围不同）；侧边栏按板块分组（总览 / 运维：服务管理、架构图 / 知识库：上传知识、知识列表、未命中问题），Vite 8 + Vue3 + vue-router 5 + pinia 4 + Tailwind 4 + daisyUI 5
 - **calls 表已建成**：每次问答调用记一笔（意图、实际回答来源、是否降级、耗时），流式接口用生成器 try/finally 保证断流也落库；总览页展示调用统计（总次数 / 知识问答成功率 / 降级次数 / 平均耗时）与最近调用记录
 - **kb-agent 管理页已做实**：上传（类型/分类可选）、知识列表（筛选 / 删除）、未命中清单（删除 / 清空）
 - **代理模式**：前端只调 `/api/v1/admin`（overview/calls 来自本服务，kb 数据转发 kb-agent 的 knowledge/missed 接口），前端不直连 Agent；kb-agent 不可用统一返回 502
@@ -52,6 +52,7 @@ ai-assistant（统一AI助手服务：意图识别 + 路由 + 汇总）
 
 ## 更新日志
 
+- 2026-09-14 管理端代码整理（零行为变化，CDP 逐页验证通过）：建 `utils/`（meta 状态与类型映射 / format / error 错误提取 / architecture 画图纯函数）+ `composables/usePolling`（三处轮询共用）+ `api/client.js`（createClient 工厂，/api、/ops、/study 三个 axios 实例合一）+ `components/PageHeader`；架构图页 509 行单文件拆为 `views/architecture/` 八文件——父组件只留视图切换（VIEWS 配置数组）、实时状态与抽屉外壳，四个视图面板与节点/接口两种抽屉内容各自独立，数据面板自带轮询；六个视图全部接入公共模块
 - 2026-09-01 管理界面 v1：前端拆分为聊天端（frontend）+ 管理端（admin-frontend，5174，Vite 8 + vue-router 5 + Tailwind 4 + daisyUI 5）；本服务建库（SQLite assistant.db + calls 表，每次问答记一笔）；新增 `/api/v1/admin`（overview 统计 / calls 记录 / kb 代理转发：知识列表、删除、上传、未命中清单），kb-agent 不可用统一 502
 - 2026-08-26 前端重构：axios 统一请求（`api/request.js` 实例 + 拦截器）、pinia 状态管理（Options 写法）、组件拆分（ChatHeader / MessageList / MessageBubble / ChatInput），App.vue 纯布局；组件直读 store 不传 props；`/status` 移至 `/api/status` 统一前缀
 - 2026-08-26 修复 SSE 透传丢换行 bug：registry 透传时 `iter_lines()` 剥掉的换行未补回、空行被过滤，导致前端按 `\n\n` 切块失败、流式界面永远「思考中…」；修复为逐行补 `\n`、保留空行；前端 streamChat 增加流结束兜底解析

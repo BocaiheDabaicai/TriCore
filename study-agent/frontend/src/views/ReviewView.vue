@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { AlignLeft, BookOpen, Calendar, Clock, FileText, PieChart, Search, SlidersHorizontal } from 'lucide-vue-next'
 import { listReadings } from '../api/readings'
 import { MODE_META } from '../utils/reading'
+import StarRating from '../components/StarRating.vue'
 
 // 回顾页：检索行（搜索 + 高级筛选开关） + 主体列表；右下角悬浮统计
 const router = useRouter()
@@ -214,7 +215,20 @@ const stats = computed(() => {
                       <span v-if="r.tag" class="badge badge-sm badge-outline">{{ r.tag }}</span>
                     </div>
                   </div>
-                  <div class="text-xs text-base-content/50">{{ r.updated_at }} 更新</div>
+                  <!-- 第二行：左边更新时间 + 小领域（没有就不显示），右边评分（没打分就不显示） -->
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0 text-xs text-base-content/50">
+                      <span class="shrink-0">{{ r.updated_at }} 更新</span>
+                      <span
+                        v-for="d in r.domains"
+                        :key="d"
+                        class="badge badge-xs badge-ghost text-base-content/60"
+                      >
+                        {{ d }}
+                      </span>
+                    </div>
+                    <StarRating v-if="r.rating" :value="r.rating" size="sm" class="shrink-0" />
+                  </div>
                 </div>
               </div>
             </div>

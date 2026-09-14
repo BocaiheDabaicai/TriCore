@@ -172,6 +172,21 @@ kb-agent 没启动时 ai-assistant 也能用（知识问题自动降级为通用
 
 > 历史备注：早期项目（tricore 系列：销售/库存/办公协同业务系统）已于 2026-08-25 归档至 `archived/`，不再维护。
 
+#### 2026年09月14日【研读库·评分与小领域 + 管理端代码整理】
+
+- **研读库·文章评分**：详情页直接打分（不走「修改」流程）——5 星 + 半星、每半星 1 分（10 分制），悬停预览分数、点星即保存（静默 PUT，失败才提示）、再点同一颗取消打分
+- **研读库·小领域**：详情页设置 0-3 个，输入回车自创或从候选（全部记录已有领域）里点选复用；徽章带 × 可删，满 3 个后隐藏添加入口
+- **研读库·回顾列表展示**：卡片第二行显示小领域徽章（badge-ghost）与只读星级 + 分数；没评分 / 没领域的不显示
+- **研读库·星级抽成组件**：`components/StarRating.vue`（`interactive` 可交互 / 只读、`size` 两档）——详情页交互式、列表只读复用同一套视觉
+- **研读库·后端字段与轻量迁移**：readings 表新增 `rating`（0-10 整数）/ `domains`（JSON 字符串数组）两列——`create_all` 不会给已有表补列，启动时检查缺列后用 `ALTER TABLE ADD COLUMN` 补齐（只加列、不动现有数据）；接口统一清洗（评分夹 0-10、领域去空白去重、最多 3 个）
+- **管理端·建 utils / composables**（沿用研读库的判断标准：纯函数≥2 处用→utils、有状态逻辑→composables、单处使用留原地）：
+  - `utils/meta.js`（STATUS_META 两版合并为 6 键超集 / METHOD_META / KIND_LABELS——总览页 Agent 状态语义不同保留本地）、`utils/format.js`（fmtUptime / fmtDuration）、`utils/error.js`（errText，8 处错误提取合一）、`utils/architecture.js`（rectStyle / edgePath / cardClass，画图纯函数）
+  - `composables/usePolling.js`（挂载即执行 + 定时轮询 + 卸载清理）——服务管理 / 架构图 / 数据面板三处共用
+  - `api/client.js`：`createClient(baseURL, timeout)` 工厂——三个 axios 实例（/api、/ops、/study）不再各写一遍拦截器
+  - `components/PageHeader.vue`：六个视图的页头统一（标题 / 说明 / actions 插槽）
+- **管理端·架构图页拆分**：509 行单文件 → `views/architecture/` 八个文件——父组件保留视图切换（VIEWS 配置数组 + 描述不再嵌套三元）、实时状态与抽屉外壳；`OverallPanel`（画布连线图例）/ `InterfacePanel` / `DataPanel`（实时计数下沉 + 自轮询）/ `AiPanel` / `NodeDetails` / `ApiDetails`；面板经 `nameMap`（computed 派生）查中文名
+- 验证：管理端六页 + 架构图四视图 + 抽屉开 / 切 / 关 + 日志弹窗用 CDP 真实点击跑通；轮询用 Network 层验证（12 秒内 2 次请求）；构建零告警、控制台零警告；grep 不变量（axios / setInterval / detail 提取各归一处）
+
 #### 2026年09月11日【研读库前后端建成 + 管理端架构图四视角 + manager 服务表格增强】
 
 - **研读库 study-agent·后端建成（8003）**：readings（列表 / 详情 / 创建 / 更新 / 删除 + 附件上传与打开）+ sources（寻文站点，首次启动自动灌种子）；SQLite 启动自动建表；venv 与 requirements 补齐

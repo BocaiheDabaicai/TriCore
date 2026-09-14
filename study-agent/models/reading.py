@@ -3,7 +3,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime
+from sqlalchemy import JSON, Integer, String, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from core.database import Base
 
@@ -20,6 +20,12 @@ class Reading(Base):
 
     # 分类标签（选填，自创或复用已有）
     tag: Mapped[str] = mapped_column(String(50), default="")
+
+    # 评分（0-10，0 = 未打分）——回顾详情里点星星打的，半星 = 1 分
+    rating: Mapped[int] = mapped_column(Integer, default=0)
+
+    # 小领域（0-3 个，自创或复用已有，如 数字化 / 智能体）——JSON 列存字符串列表
+    domains: Mapped[list] = mapped_column(JSON, default=list)
 
     # 文献信息（选填）：作者 / 出版时间（手填 YYYY-MM）/ 期刊
     author: Mapped[str] = mapped_column(String(200), default="")

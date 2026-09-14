@@ -1,6 +1,11 @@
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { ref } from 'vue'
 import { getLogs, getServices, restartService, startAll, startService, stopAll, stopService } from '../api/services'
+import { usePolling } from '../composables/usePolling'
+import { errText } from '../utils/error'
+import { fmtUptime } from '../utils/format'
+import { STATUS_META } from '../utils/meta'
+import PageHeader from '../components/PageHeader.vue'
 
 // 服务管理页：状态来自 manager（8002，经 /ops 代理直连）
 const services = ref([])
@@ -8,15 +13,6 @@ const error = ref('')
 const busy = ref('')        // 正在操作的服务名（按钮 loading）
 const logTarget = ref(null) // 日志弹窗显示的服务名
 const logContent = ref('')
-
-let timer = null
-
-const STATUS_META = {
-  running: { badge: 'badge-success', text: '运行中' },
-  starting: { badge: 'badge-warning', text: '启动中' },
-  stopped: { badge: 'badge-ghost', text: '已停止' },
-  error: { badge: 'badge-error', text: '异常' },
-}
 
 async function refresh() {
   try {
@@ -32,7 +28,7 @@ async function operate(name, action) {
   try {
     await action(name)
   } catch (e) {
-    error.value = e.response?.data?.detail || `${name} 操作失败`
+    error.value = errText(e, `${name} 操作失败`)
   } finally {
     busy.value = ''
     await refresh()
@@ -43,7 +39,7 @@ async function runAll(action) {
   try {
     await action()
   } catch (e) {
-    error.value = e.response?.data?.detail || '操作失败'
+    error.value = errText(e, '操作失败')
   } finally {
     await refresh()
   }
@@ -56,36 +52,18 @@ async function openLogs(name) {
   logContent.value = res.lines.join('\n') || '（暂无日志）'
 }
 
-function fmtUptime(seconds) {
-  if (seconds == null) return '—'
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = seconds % 60
-  if (h) return `${h} 小时 ${m} 分`
-  if (m) return `${m} 分 ${s} 秒`
-  return `${s} 秒`
-}
-
-onMounted(() => {
-  refresh()
-  timer = setInterval(refresh, 5000)   // 与 manager 探活周期一致
-})
-onUnmounted(() => clearInterval(timer))
+usePolling(refresh, 5000)   // 与 manager 探活周期一致
 </script>
 
 <template>
   <div class="p-6 space-y-6">
-    <div class="flex items-end justify-between">
-      <div>
-        <h1 class="text-2xl font-bold">服务管理</h1>
-        <p class="text-sm text-base-content/60 mt-1">各 Agent 服务的启动、停止与运行状态（manager 8002）</p>
-      </div>
-      <div class="flex gap-2">
+    <PageHeader title="服务管理" desc="各 Agent 服务的启动、停止与运行状态（manager 8002）">
+      <template #actions>
         <button class="btn btn-sm btn-outline" @click="refresh()">刷新</button>
         <button class="btn btn-sm btn-primary" @click="runAll(startAll)">全部启动</button>
         <button class="btn btn-sm btn-outline btn-error" @click="runAll(stopAll)">全部停止</button>
-      </div>
-    </div>
+      </template>
+    </PageHeader>
 
     <div v-if="error" role="alert" class="alert alert-warning">
       <button class="btn btn-xs btn-ghost" @click="error = ''">✕</button>

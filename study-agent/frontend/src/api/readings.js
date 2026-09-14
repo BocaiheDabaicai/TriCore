@@ -2,7 +2,7 @@ import request from './request'
 
 // 研读记录数据层 —— 调用后端接口（study-agent 8003，经 Vite 代理 /api 转发）
 // 返回结构与页面约定一致：{ message, data }（列表多一个 total），页面零改动
-// 字段：id / title / mode / tag / author / published / journal / note / attachment / created_at / updated_at
+// 字段：id / title / mode / tag / rating / domains / author / published / journal / note / attachment / created_at / updated_at
 
 export async function listReadings() {
   return request.get('/readings')

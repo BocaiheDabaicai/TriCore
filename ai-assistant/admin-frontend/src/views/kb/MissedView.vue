@@ -1,6 +1,8 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { clearMissed, deleteMissed, listMissed } from '../../api/kb'
+import { errText } from '../../utils/error'
+import PageHeader from '../../components/PageHeader.vue'
 
 // 未命中问题页：知识库答不上的问题清单（按被问次数排序）——知识库建设的输入
 const items = ref([])
@@ -13,7 +15,7 @@ async function load() {
   try {
     items.value = (await listMissed(100)).data
   } catch (e) {
-    error.value = '加载失败：' + (e.response?.data?.detail || e.message)
+    error.value = '加载失败：' + errText(e)
   } finally {
     loading.value = false
   }
@@ -25,7 +27,7 @@ async function remove(item) {
     await deleteMissed(item.id)
     load()
   } catch (e) {
-    alert('删除失败：' + (e.response?.data?.detail || e.message))
+    alert('删除失败：' + errText(e))
   }
 }
 
@@ -36,7 +38,7 @@ async function clearAll() {
     await clearMissed()
     load()
   } catch (e) {
-    alert('清空失败：' + (e.response?.data?.detail || e.message))
+    alert('清空失败：' + errText(e))
   }
 }
 
@@ -45,10 +47,7 @@ onMounted(load)
 
 <template>
   <div class="p-6 space-y-6">
-    <div>
-      <h1 class="text-2xl font-bold">未命中问题</h1>
-      <p class="text-sm text-base-content/60 mt-1">用户问什么没答上，就是该往知识库补什么——补充资料后删除对应记录</p>
-    </div>
+    <PageHeader title="未命中问题" desc="用户问什么没答上，就是该往知识库补什么——补充资料后删除对应记录" />
 
     <div class="card bg-base-100 shadow">
       <div class="card-body">

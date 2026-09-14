@@ -1,6 +1,8 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { getCalls, getOverview } from '../api/admin'
+import { fmtDuration } from '../utils/format'
+import PageHeader from '../components/PageHeader.vue'
 
 // 总览页：各 Agent 在线状态 + 调度器调用统计（数据来自 ai-assistant 的 calls 表）
 const overview = ref(null)
@@ -8,6 +10,7 @@ const calls = ref([])
 const error = ref('')
 
 const SOURCE_LABELS = { knowledge: 'kb-agent', general: '兜底对话', none: '未配置 LLM' }
+// Agent 在线状态（来自调度器 registry，与架构图的服务进程状态语义不同，保留本地）
 const STATUS_META = {
   online: { badge: 'badge-success', text: '在线' },
   offline: { badge: 'badge-error', text: '离线' },
@@ -21,10 +24,6 @@ const successRate = computed(() => {
   return ((s.success_calls / s.knowledge_calls) * 100).toFixed(1) + '%'
 })
 
-function fmtDuration(ms) {
-  return ms >= 1000 ? (ms / 1000).toFixed(1) + ' s' : ms + ' ms'
-}
-
 onMounted(async () => {
   try {
     overview.value = await getOverview()
@@ -37,10 +36,7 @@ onMounted(async () => {
 
 <template>
   <div class="p-6 space-y-6">
-    <div>
-      <h1 class="text-2xl font-bold">总览</h1>
-      <p class="text-sm text-base-content/60 mt-1">各 Agent 在线状态与调度调用统计</p>
-    </div>
+    <PageHeader title="总览" desc="各 Agent 在线状态与调度调用统计" />
 
     <div v-if="error" role="alert" class="alert alert-warning">{{ error }}</div>
 
