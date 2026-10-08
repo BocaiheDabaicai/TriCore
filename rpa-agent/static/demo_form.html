@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>加点信息录入（演示页）</title>
+  <style>
+    body { font-family: "Microsoft YaHei", sans-serif; background: #f4f6f8; margin: 0; padding: 40px; }
+    .card { max-width: 520px; margin: 0 auto; background: #fff; border-radius: 10px;
+            box-shadow: 0 2px 12px rgba(0,0,0,.08); padding: 28px 32px; }
+    h1 { font-size: 18px; margin: 0 0 6px; }
+    p.tip { color: #6b7280; font-size: 13px; line-height: 1.6; margin: 0 0 22px; }
+    label { display: block; font-size: 13px; color: #374151; margin-bottom: 14px; }
+    input { display: block; width: 100%; box-sizing: border-box; margin-top: 6px; padding: 8px 10px;
+            border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+    button { margin-top: 6px; width: 100%; padding: 10px; border: 0; border-radius: 6px;
+             background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }
+    #result { margin-top: 18px; padding: 12px; border-radius: 6px; background: #f3f4f6;
+              font-size: 14px; color: #111827; min-height: 20px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>加点信息录入（演示页）</h1>
+    <p class="tip">
+      这是给「演示单元」练手用的本地页面，不碰任何真实系统。<br>
+      它存在的意义：在动金蝶/OA 之前，先验证「运行 → 分步 → 截图 → 断言」这条流水线是通的。
+    </p>
+
+    <label>供应商名称
+      <input id="supplier-name" placeholder="例如：贵阳某某商贸有限公司">
+    </label>
+    <label>统一社会信用代码
+      <input id="credit-code" placeholder="例如：91520000MA000000XX">
+    </label>
+    <label>联系人
+      <input id="contact" placeholder="例如：张三">
+    </label>
+
+    <button id="submit">提交</button>
+    <div id="result">等待提交…</div>
+  </div>
+
+  <script>
+    // 极简"表单"：点提交后把结果写进 #result —— 单元脚本会读这段文字来做断言
+    document.getElementById('submit').addEventListener('click', () => {
+      const name = document.getElementById('supplier-name').value.trim();
+      const code = document.getElementById('credit-code').value.trim();
+      const contact = document.getElementById('contact').value.trim();
+      const box = document.getElementById('result');
+      box.textContent = name
+        ? `已提交：${name}｜信用代码 ${code || '（未填）'}｜联系人 ${contact || '（未填）'}`
+        : '提交失败：请先填写供应商名称';
+      box.style.background = name ? '#ecfdf5' : '#fef2f2';
+    });
+  </script>
+</body>
+</html>

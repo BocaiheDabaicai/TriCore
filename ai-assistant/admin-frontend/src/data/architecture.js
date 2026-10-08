@@ -26,6 +26,7 @@ export const GUARD_FRAME = { x: 20, y: 20, w: 1140, h: 420, label: 'manager 守�
 export const ZONES = [
   { x: 48, y: 76, w: 700, h: 340, label: '企业AI助手集群' },
   { x: 776, y: 76, w: 364, h: 154, label: '研读库（独立体系）' },
+  { x: 776, y: 246, w: 364, h: 170, label: '办公自动化（独立体系）' },
 ]
 
 // 服务节点：key 与 services.json 的 name 对应（实时状态按它合并）
@@ -101,6 +102,25 @@ export const NODES = [
       deps: '暂未接 LLM（辅助整理是下一步）',
     },
   },
+  // 办公自动化区（独立体系：有自己的操作台，不接调度器，只被 manager 守护）
+  {
+    key: 'rpa-frontend', x: 800, y: 310,
+    detail: {
+      role: '办公自动化操作台：浏览器状态与人工登录、单元清单、运行时输入与逐步结果（步骤/日志/截图）、截图资料库',
+      stack: 'Vue 3 + Vite + daisyUI + pinia',
+      db: '无',
+      deps: '经 /api 代理到执行器（8004）',
+    },
+  },
+  {
+    key: 'rpa-agent', x: 970, y: 310,
+    detail: {
+      role: '办公自动化执行器：按"单元"（一条业务数据 × 一个环节）驱动浏览器在网页系统上干活——加供应商、配车辆、填地址、分价格策略等；运行留痕 + 失败截图，人工验证后才算跑通',
+      stack: 'FastAPI + SQLite + Playwright（同步 API 锁在专用线程）',
+      db: 'rpa_agent.db（runs / run_steps / unit_meta）+ data/（浏览器 profile、每步截图）',
+      deps: '浏览器用系统 Edge（msedge 通道）；目标系统：金蝶（网页版）、OA；执行层不用 LLM（确定性脚本），登录要人工过验证码',
+    },
+  },
   // manager：框的主人，挂在框外下边缘（不受自己管理，状态恒为运行中——能打开这个页面就说明它活着）
   {
     key: 'manager', x: 330, y: 452, unmanaged: true, cnName: 'manager', sub: '守护根进程 · 8002',
@@ -137,4 +157,6 @@ export const EDGES = [
   { from: 'ai-assistant', to: 'notice-agent', dashed: true, points: [[509, 158], [580, 362]] },
   // 研读区内部
   { from: 'study-frontend', to: 'study-agent', points: [[950, 168], [970, 168]] },
+  // 办公自动化区内部（同样独立：不与调度器连线）
+  { from: 'rpa-frontend', to: 'rpa-agent', points: [[950, 338], [970, 338]] },
 ]

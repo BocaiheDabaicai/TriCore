@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from core.database import SessionLocal
 from models.missed import MissedQuestion
+from services.llm_service import is_configured, draft_supplement
 
 router = APIRouter(prefix="/api/v1/missed", tags=["未命中问题"])
 
@@ -44,6 +45,25 @@ def list_missed(
             for m in items
         ],
     }
+
+
+@router.post("/{missed_id}/draft")
+def draft_missed(missed_id: int, db: Session = Depends(get_db)):
+    """
+    AI 起草补充资料的骨架（管理端「补充」按钮触发）
+    - 只返回草稿供人工编辑，不入库；点保存才走 /api/v1/knowledge/create
+    - 同步 def 路由：LLM 是阻塞调用，FastAPI 会自动丢到线程池，不阻塞事件循环
+    """
+    row = db.query(MissedQuestion).filter(MissedQuestion.id == missed_id).first()
+    if not row:
+        return {"message": "记录不存在", "data": None}
+    if not is_configured():
+        return {"message": "未配置大模型，无法起草，请手工填写", "data": None}
+
+    draft = draft_supplement(row.question)
+    if not draft:
+        return {"message": "AI 起草失败，请重试或手工填写", "data": None}
+    return {"message": "起草成功", "data": draft}
 
 
 @router.delete("")

@@ -10,7 +10,7 @@ export const DATASTORES = [
     tables: [
       {
         name: 'knowledge',
-        desc: '统一知识表：kind 区分制度 / 文档 / 流程，keywords 关键词（宽度查询的目录），content 全文；每条知识入库时自动分块向量化',
+        desc: '统一知识表：kind 区分制度 / 文档 / 流程，keywords 关键词（枚举查询的目录），summary 摘要（汇总比较时整篇喂给模型），content 全文；每条知识入库时自动分块向量化',
         live: 'knowledge',
       },
       {
@@ -59,6 +59,30 @@ export const DATASTORES = [
     extra: {
       text: '附件目录 uploads/：论文 PDF 与截图原文件（命名 {记录id}_{文件名}，按数据策略计划不进 git）',
       live: 'attachments',
+    },
+  },
+  {
+    name: 'rpa_agent.db',
+    ownerKey: 'rpa-agent',
+    type: 'SQLite 单文件',
+    tables: [
+      {
+        name: 'runs',
+        desc: '每次单元运行一笔：哪个单元 / 输入 JSON / 状态（排队·执行·成功·失败·取消·被打断）/ 停在哪个失败步 / 产物目录；服务重启时会把遗留的"执行中"标成被打断',
+        live: 'runs',
+      },
+      {
+        name: 'run_steps',
+        desc: '一次运行里每一步的状态、耗时、截图文件名与错误——操作台的步骤列表就是读它',
+      },
+      {
+        name: 'unit_meta',
+        desc: '单元的人工验证标记：系统断言通过只是"脚本没报错"，人工核对过金蝶结果才算真跑通（双判定）',
+      },
+    ],
+    extra: {
+      text: '浏览器 profile 与数据目录：data/browser_profile（登录态，绝不进 git）、data/runs/{id}/（每步截图）、data/shots/（操作台上传的页面截图）',
+      live: 'shots',
     },
   },
   {

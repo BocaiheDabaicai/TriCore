@@ -25,6 +25,7 @@ from services.llm_service import (
     chat_with_history,
     stream_chat,
     classify_dimension,
+    preselect_documents,
 )
 from services.embedding_service import (
     is_configured as embed_is_configured,
@@ -34,6 +35,13 @@ from services.embedding_service import (
 router = APIRouter(prefix="/api/v1/agent", tags=["智能问答"])
 
 type_labels = {"policy": "制度", "document": "文档", "workflow": "流程模板"}
+
+# 「指定文档」模式：勾选文档的正文总量超过这个字数就不全文喂，退回勾选范围内的向量检索
+# （全文喂比分块检索完整，但语料长大后不能无限塞；12000 字约 1 万 token，留足空间）
+SELECTED_FULLTEXT_LIMIT = 12000
+
+# 目录条数超过这个值：AI 预选先做向量粗排缩小范围，再交给 LLM 挑
+CATALOG_MAX = 60
 
 
 def get_db():
@@ -47,6 +55,11 @@ def get_db():
 class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None   # 不传则开启新会话
+    selected_ids: list[int] | None = None   # 「指定文档」模式：只用这几篇知识回答
+
+
+class PreselectRequest(BaseModel):
+    question: str
 
 
 # 未命中判定短语：深度回答的 prompt 要求"资料不足时只回复这句话"，
@@ -70,6 +83,35 @@ def record_missed(db: Session, question: str) -> None:
     else:
         db.add(MissedQuestion(question=question[:500]))
     db.commit()
+
+
+@router.get("/catalog")
+def get_catalog(db: Session = Depends(get_db)):
+    """知识目录：聊天端左侧「指定文档」面板用（分组由前端做，这里只给平铺清单）"""
+    rows = catalog_rows(db)
+    return {"total": len(rows), "data": rows}
+
+
+@router.post("/preselect")
+def preselect(req: PreselectRequest, db: Session = Depends(get_db)):
+    """
+    AI 预选文档：给「指定文档」面板做默认勾选（用户可增删）
+    - 目录不大 → 整个目录交给 LLM 挑（语料小的时候，比向量相似度准得多）
+    - 目录很大 → 先向量粗排取前 20 条候选，再让 LLM 从候选里挑
+    - 问题为空 / 未配置 LLM → 返回空，前端就不预选（用户自己勾）
+    """
+    question = (req.question or "").strip()
+    rows = catalog_rows(db)
+    if not rows or not question or not llm_is_configured():
+        return {"message": "预选跳过", "data": {"ids": [], "reason": ""}}
+
+    if len(rows) > CATALOG_MAX and embed_is_configured():
+        matched = retrieve_top_k(db, question, k=20, threshold=0.0)
+        keep = {m["id"] for m in matched}
+        rows = [it for it in rows if it["id"] in keep]
+
+    ids = preselect_documents(question, rows)
+    return {"message": "预选完成", "data": {"ids": ids}}
 
 
 def prepare_breadth(db: Session) -> tuple[str, list]:
@@ -97,6 +139,79 @@ def prepare_breadth(db: Session) -> tuple[str, list]:
     return "\n\n".join(parts), sources
 
 
+def matches_to_context(matched: list[dict]) -> tuple[str, list]:
+    """检索命中的块 → (拼好的上下文, 去重后的来源列表)"""
+    context = "\n\n".join(
+        f"【{type_labels.get(m['type'], '资料')}：{m['title']}】{m['content']}" for m in matched
+    )
+    # 同一条知识可能命中多个块，sources 按 (type, id) 去重，避免来源列表重复
+    seen = set()
+    sources = []
+    for m in matched:
+        key = (m["type"], m["id"])
+        if key not in seen:
+            seen.add(key)
+            sources.append({"type": m["type"], "id": m["id"], "title": m["title"]})
+    return context, sources
+
+
+def prepare_selected(db: Session, ids: list[int], question: str) -> tuple[str, list]:
+    """
+    「指定文档」模式的上下文：用户勾了哪几篇就只用哪几篇
+    - 正文总量不大 → 全文按标题组装（比分块检索完整：不漏块、条款上下文连续）
+    - 总量超上限 → 退回勾选范围内的向量检索（只在勾选的文档里找相关块）
+    """
+    items = (
+        db.query(Knowledge)
+        .filter(Knowledge.id.in_(ids))
+        .order_by(Knowledge.category, Knowledge.id)
+        .all()
+    )
+    if not items:
+        return "", []
+
+    sources = [{"type": it.kind, "id": it.id, "title": it.title} for it in items]
+    total = sum(len(it.content or "") for it in items)
+    if total > SELECTED_FULLTEXT_LIMIT and embed_is_configured():
+        matched = retrieve_top_k(db, question, source_ids=[it.id for it in items])
+        if matched:
+            return matches_to_context(matched)
+
+    context = "\n\n".join(
+        f"【{type_labels.get(it.kind, '资料')}：{it.title}】{it.content}" for it in items
+    )
+    return context, sources
+
+
+def prepare_aggregate(db: Session) -> tuple[str, list]:
+    """
+    广度·汇总的上下文：把全部条目的摘要喂给模型做跨文档综合（不走向量检索）
+    - 为什么不用检索：汇总/比较类问题要的是「覆盖面」而不是「相似度」，
+      向量 top-k 天然只会命中少数几条，做不了"把所有相关规定总结一下"
+    - 摘要缺失时退回正文首段兜底（可用 backfill_summary.py 补齐）
+    - 当前语料规模一次喂得下；摘要总量长大后（约 >2 万字）再按分类分批 map-reduce
+    """
+    items = db.query(Knowledge).order_by(Knowledge.category, Knowledge.id).all()
+    parts = []
+    for it in items:
+        label = type_labels.get(it.kind, "资料")
+        brief = it.summary or (it.content or "")[:120]
+        parts.append(f"【{label}：{it.title}】（{it.category}）{brief}")
+
+    sources = [{"type": it.kind, "id": it.id, "title": it.title} for it in items]
+    return "\n\n".join(parts), sources
+
+
+def catalog_rows(db: Session) -> list[dict]:
+    """知识目录：只含标题/分类/类型/关键词（不含正文）——指定文档面板与 AI 预选共用"""
+    items = db.query(Knowledge).order_by(Knowledge.category, Knowledge.id).all()
+    return [
+        {"id": it.id, "title": it.title, "category": it.category,
+         "kind": it.kind, "keywords": it.keywords}
+        for it in items
+    ]
+
+
 def prepare_answer(req: ChatRequest, db: Session) -> dict:
     """两个端点共用的准备步骤：会话 → 历史 → 维度判断 → 检索/列表 → 组装上下文和来源"""
     # 生成/沿用会话ID
@@ -117,6 +232,20 @@ def prepare_answer(req: ChatRequest, db: Session) -> dict:
     if last_user_msgs:
         search_text = f"{req.question} {last_user_msgs[-1].content}"
 
+    # 指定文档模式：用户勾了文档 = 范围已由人指定，不再做维度判断、不走向量检索
+    if req.selected_ids:
+        context, sources = prepare_selected(db, req.selected_ids, search_text)
+        if not context and llm_is_configured():
+            record_missed(db, req.question)   # 勾选的资料里没有内容 → 同样算未命中
+        return {
+            "session_id": session_id,
+            "context": context,
+            "sources": sources,
+            "retrieval_method": "selected",
+            "dimension": "depth",
+            "history_dicts": [{"role": m.role, "content": m.content} for m in history],
+        }
+
     # 第一步：维度判断（纯 AI 判断 → 失败降级 depth）
     # 不写固定词表、不给条目名单——自然语言千变万化（名称不全、意思相近），
     # 只给 AI 当前问题 + 上一轮问题（理解指代），让它按语义自行判断
@@ -127,23 +256,13 @@ def prepare_answer(req: ChatRequest, db: Session) -> dict:
     if dimension == "breadth":
         context, sources = prepare_breadth(db)
         retrieval_method = "list"
+    elif dimension == "aggregate":
+        context, sources = prepare_aggregate(db)
+        retrieval_method = "aggregate"
     elif embed_is_configured() and db.query(KnowledgeVector).count() > 0:
         matched = retrieve_top_k(db, search_text)
         retrieval_method = "embedding"
-        context_parts = []
-        for m in matched:
-            label = type_labels.get(m["type"], "资料")
-            context_parts.append(f"【{label}：{m['title']}】{m['content']}")
-        context = "\n\n".join(context_parts)
-
-        # 同一条知识可能命中多个块，sources 按 (type, id) 去重，避免来源列表重复
-        seen = set()
-        sources = []
-        for m in matched:
-            key = (m["type"], m["id"])
-            if key not in seen:
-                seen.add(key)
-                sources.append({"type": m["type"], "id": m["id"], "title": m["title"]})
+        context, sources = matches_to_context(matched)
 
         # 深度检索零命中（全部低于分数阈值）→ 记录未命中问题（知识库建设的输入）
         if not matched and llm_is_configured():

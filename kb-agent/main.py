@@ -32,6 +32,9 @@ def ensure_columns():
         if "keywords" not in cols:
             conn.execute(text("ALTER TABLE knowledge ADD COLUMN keywords VARCHAR(200)"))
             conn.commit()
+        if "summary" not in cols:
+            conn.execute(text("ALTER TABLE knowledge ADD COLUMN summary VARCHAR(500)"))
+            conn.commit()
 
 
 ensure_columns()

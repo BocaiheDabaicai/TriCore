@@ -69,6 +69,28 @@
       "cn_name": "研读端",
       "desc": "研读库前端：论文精读泛读笔记与回顾",
       "enter_url": "http://127.0.0.1:5175/"
+    },
+    {
+      "name": "rpa-agent",
+      "port": 8004,
+      "cwd": "rpa-agent",
+      "command": "{python} -m uvicorn main:app --port 8004",
+      "probe_path": "/api/health",
+      "auto_start": true,
+      "cn_name": "办公自动化",
+      "desc": "办公自动化执行器：按单元驱动浏览器完成网页系统上的固定流程",
+      "enter_url": "http://127.0.0.1:8004/docs"
+    },
+    {
+      "name": "rpa-frontend",
+      "port": 5176,
+      "cwd": "rpa-agent/frontend",
+      "command": "{npm} run dev",
+      "probe_path": "/",
+      "auto_start": true,
+      "cn_name": "自动化操作台",
+      "desc": "操作台：浏览器登录、单元运行与逐步验证、截图资料库",
+      "enter_url": "http://127.0.0.1:5176/"
     }
   ]
 }

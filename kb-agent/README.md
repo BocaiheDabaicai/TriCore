@@ -72,9 +72,9 @@ kb-agent/
 │   ├── agent.py               # 智能问答（统一问答入口）
 │   └── missed.py              # 未命中问题清单（管理员查看/删除）
 ├── services/                  # 业务服务层
-│   ├── llm_service.py         # 大模型调用（RAG 生成 + 上传内容识别分类）
+│   ├── llm_service.py         # 大模型调用（RAG 生成 + 上传内容识别分类 + 扫描页视觉转写）
 │   ├── embedding_service.py   # 向量嵌入（分块 + 建索引 + 语义检索 + 同步）
-│   └── file_parser.py         # 文件解析（txt/md/pdf/docx，含 docx 表格提取）
+│   └── file_parser.py         # 文件解析（txt/md/pdf/docx/图片；PDF 无文字层的页走视觉转写）
 ├── seed_data.py               # 测试数据初始化脚本
 ├── requirements.txt
 └── .env.example               # 配置模板
@@ -89,7 +89,7 @@ kb-agent/
   - 事件：`meta`（来源/会话信息）→ `delta`（回答增量，多次）→ `done`（结束）
 
 ### 统一知识库
-- `POST /api/v1/knowledge/upload` — **统一上传**：文件（txt/md/pdf/docx）→ 解析 → LLM 识别类型（制度/文档/流程）→ 入库 → 自动分块向量化
+- `POST /api/v1/knowledge/upload` — **统一上传**：文件（txt/md/pdf/docx/图片）→ 解析 → LLM 识别类型（制度/文档/流程）→ 入库 → 自动分块向量化
   - 可选表单参数：`kind`（手动指定类型，覆盖 LLM 判断）、`category`（业务分类，不传则由 LLM 根据内容自动拟定）
 - `GET /api/v1/knowledge/list` — 知识列表（支持 keyword、category、kind 过滤）
 - `GET /api/v1/knowledge/{id}` — 知识详情
@@ -142,9 +142,11 @@ kb-agent/
 - 检索命中"块"而非整篇：答案更精准、喂给 LLM 的上下文更省 token
 
 ### 文件解析
-- 支持 txt / md / pdf / docx 上传，解析成纯文本入库
+- 支持 txt / md / pdf / docx / 图片（png、jpg、jpeg、webp）上传，解析成纯文本入库
 - docx 按文档顺序提取段落和表格：表格每行一条、`|` 分隔、合并单元格重复文字去重——制度文件里的收费标准表、申请单表不会丢失
-- 已知限制：Word 自动编号（"第X条"的 X）解析不到；表格与正文挤在同一分块时检索排序可能偏低
+- PDF 逐页判断有没有文字层：有 → pypdf 直接取字（免费、零转写误差）；无（扫描件、图片页）→ PyMuPDF 渲染成图 → 大模型视觉转写（按页计费）
+- 图片文件本身就是"没有文字层的页"，直接走视觉转写；渲染 150 DPI，每批最多 4 页一次请求，输出被截断自动拆半重试
+- 已知限制：Word 自动编号（"第X条"的 X）解析不到；表格与正文挤在同一分块时检索排序可能偏低；扫描件处理上分钟级（将来该上任务队列）
 
 ### 检索降级链
 ```
@@ -185,7 +187,7 @@ kb-agent/
 | 向量嵌入 | 硅基流动 bge-m3（可换任意家） |
 | 向量计算 | NumPy（矩阵化相似度计算） |
 | 向量存储 | SQLite 表（后续可升级 Chroma/Milvus 向量库） |
-| 文件解析 | pypdf（PDF）、python-docx（Word） |
+| 文件解析 | pypdf（PDF 文字层）、python-docx（Word）、PyMuPDF（PDF 页渲染成图） |
 
 ## 架构演进
 

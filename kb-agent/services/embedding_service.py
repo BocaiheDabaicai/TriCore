@@ -42,6 +42,24 @@ def embed_text(text: str) -> list[float]:
     return embed_texts([text])[0]
 
 
+# 每次 embedding 请求带多少块：分批太碎请求数暴涨（一个 20 块的长文档 = 20 次调用），
+# 一次全塞又可能顶到单请求的批量上限，16 是折中
+EMBED_BATCH_SIZE = 16
+
+
+def to_vectors(texts: list[str]) -> list[np.ndarray]:
+    """
+    一批文字 → 一批归一化向量（入库分块用）
+    为什么批量：原来「每块单独一次 HTTP 请求」，20 块的长文档就是 20 次串行调用，慢且占连接；
+    批量后同样内容只要 1~2 次请求
+    """
+    vecs = []
+    for i in range(0, len(texts), EMBED_BATCH_SIZE):
+        for emb in embed_texts(texts[i:i + EMBED_BATCH_SIZE]):
+            vecs.append(normalize(np.array(emb, dtype=np.float32)))
+    return vecs
+
+
 def normalize(vec: np.ndarray) -> np.ndarray:
     """
     归一化 —— 向量除以自己的长度（模长），变成"单位向量"（长度为1）
@@ -150,10 +168,10 @@ def split_chunks(text: str, chunk_size: int = 400, overlap: int = 50) -> list[st
 
 
 def add_chunks(db: Session, source_type: str, source_id: int, title: str, content: str) -> int:
-    """把一条知识的内容分块，逐块向量化入库，返回块数"""
+    """把一条知识的内容分块、批量向量化入库，返回块数"""
     chunks = split_chunks(content)
-    for i, chunk in enumerate(chunks):
-        vec = to_vector(chunk)
+    vecs = to_vectors(chunks)
+    for i, (chunk, vec) in enumerate(zip(chunks, vecs)):
         db.add(KnowledgeVector(
             source_type=source_type,
             source_id=source_id,
@@ -201,7 +219,7 @@ def sync_vector(db: Session, source_type: str, source_id: int, title: str, conte
 
     try:
         chunks = split_chunks(content)
-        vecs = [to_vector(c) for c in chunks]
+        vecs = to_vectors(chunks)   # 批量调用，一次请求带多块
     except Exception:
         # 向量化失败（网络/API 问题）不阻断业务：业务数据已保存，索引可稍后 /reindex 重建
         print(f"警告：{source_type}#{source_id} 向量同步失败，可稍后调用 /reindex 全量重建")
@@ -232,7 +250,8 @@ def delete_vector(db: Session, source_type: str, source_id: int) -> None:
     db.commit()
 
 
-def retrieve_top_k(db: Session, question: str, k: int = 6, threshold: float = 0.5) -> list[dict]:
+def retrieve_top_k(db: Session, question: str, k: int = 6, threshold: float = 0.5,
+                   source_ids: list[int] | None = None) -> list[dict]:
     """
     向量检索（矩阵版）：
       1. 问题 → 向量 → 归一化
@@ -254,7 +273,11 @@ def retrieve_top_k(db: Session, question: str, k: int = 6, threshold: float = 0.
     """
     question_vec = to_vector(question)
 
-    rows = db.query(KnowledgeVector).all()
+    # source_ids 不为空 → 只在勾选的那几篇里检索（「指定文档」模式语料大时的退路）
+    query = db.query(KnowledgeVector)
+    if source_ids:
+        query = query.filter(KnowledgeVector.source_id.in_(source_ids))
+    rows = query.all()
     if not rows:
         return []
 

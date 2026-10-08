@@ -5,7 +5,7 @@
 #      （kb-agent 的 knowledge/missed 已现成），前端不直连 Agent，与问答链路同一模式
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -124,12 +124,16 @@ def kb_delete_knowledge(item_id: int):
 
 
 @router.post("/kb/upload")
-async def kb_upload(
+def kb_upload(
     file: UploadFile = File(...),
     kind: str | None = Form(default=None),
     category: str | None = Form(default=None),
 ):
-    """转发：上传文件（multipart 原样透传，表单值原样带上）"""
+    """
+    转发：上传文件（multipart 原样透传，表单值原样带上）
+    同步 def：httpx.post 是阻塞调用，放在 async 路由里会把调度器的事件循环也冻住
+    （上传期间聊天端问不了问题），同步 def 走线程池就没这个问题
+    """
     data = {}
     if kind:
         data["kind"] = kind
@@ -138,10 +142,32 @@ async def kb_upload(
     try:
         r = httpx.post(
             f"{KB_AGENT_URL}/api/v1/knowledge/upload",
-            files={"file": (file.filename, await file.read(), file.content_type)},
+            files={"file": (file.filename, file.file.read(), file.content_type)},
             data=data,
             timeout=120.0,   # 上传含 LLM 分类 + 向量化，放宽超时
         )
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError:
+        raise kb_unavailable()
+
+
+@router.post("/kb/missed/{missed_id}/draft")
+def kb_draft_missed(missed_id: int):
+    """转发：AI 起草补充资料骨架（含 LLM 调用，超时放宽）"""
+    try:
+        r = httpx.post(f"{KB_AGENT_URL}/api/v1/missed/{missed_id}/draft", timeout=120.0)
+        r.raise_for_status()
+        return r.json()
+    except httpx.HTTPError:
+        raise kb_unavailable()
+
+
+@router.post("/kb/knowledge/create")
+def kb_create_knowledge(payload: dict = Body(...)):
+    """转发：手工创建知识（管理端补充未命中问题用，JSON 原样透传给 kb-agent 校验）"""
+    try:
+        r = httpx.post(f"{KB_AGENT_URL}/api/v1/knowledge/create", json=payload, timeout=60.0)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:

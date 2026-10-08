@@ -1,7 +1,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getStatus } from '../api/chat'
+import { useChatStore } from '../stores/chat'
 
+const chat = useChatStore()
 const status = ref('正在连接服务…')
 
 onMounted(async () => {
@@ -18,5 +20,8 @@ onMounted(async () => {
   <header class="chat-header">
     <h1>企业AI助手</h1>
     <span class="subtitle">{{ status }}</span>
+    <button v-if="chat.messages.length" class="btn-new" :disabled="chat.loading" @click="chat.newSession()">
+      新对话
+    </button>
   </header>
 </template>

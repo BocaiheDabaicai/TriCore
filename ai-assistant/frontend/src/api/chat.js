@@ -8,15 +8,28 @@ export function getStatus() {
   return request.get('/status')
 }
 
+// 知识目录（「指定文档」面板的清单，只含标题/分类/关键词）
+export function fetchCatalog() {
+  return request.get('/v1/catalog')
+}
+
+// AI 预选：让后端按问题挑出最相关的几篇（返回 id 列表，用户可改）
+export function preselectDocs(question) {
+  return request.post('/v1/preselect', { question }, { timeout: 60000 })
+}
+
 // 流式问答（SSE → fetch）—— axios 在浏览器读不了流式响应体，
 // 只能 fetch + ReadableStream 逐块读；封装成 async 生成器，
 // 调用方用 for await...of 逐个拿事件，屏蔽底层差异
-export async function* streamChat(question, sessionId, history) {
+// selectedIds 非空 = 「指定文档」模式：只用勾选的这几篇回答
+export async function* streamChat(question, sessionId, history, selectedIds) {
   const resp = await fetch('/api/v1/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, session_id: sessionId, history }),
+    body: JSON.stringify({ question, session_id: sessionId, history, selected_ids: selectedIds }),
   })
+  // 非 2xx（如代理报 500）不是 SSE 流，直接抛错——否则会被当成"没有内容的正常回答"静默吞掉
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
 
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()

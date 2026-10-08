@@ -1,6 +1,8 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { deleteKnowledge, listKnowledge } from '../../api/kb'
+import { useConfirmStore } from '../../stores/confirm'
+import { useToastStore } from '../../stores/toast'
 import { errText } from '../../utils/error'
 import { KIND_LABELS } from '../../utils/meta'
 import PageHeader from '../../components/PageHeader.vue'
@@ -12,6 +14,9 @@ const total = ref(0)
 const loading = ref(false)
 const error = ref('')
 const filters = reactive({ keyword: '', kind: '', category: '' })
+
+const confirmDialog = useConfirmStore()
+const toast = useToastStore()
 
 // 页头说明带总数，随筛选结果变化
 const desc = computed(() => `知识库内容管理：筛选、删除（共 ${total.value} 条）`)
@@ -38,12 +43,19 @@ function reset() {
 }
 
 async function remove(item) {
-  if (!confirm(`确定删除「${item.title}」？删除后不可恢复。`)) return
+  const ok = await confirmDialog.confirm({
+    title: `删除「${item.title}」？`,
+    message: '删除后不可恢复。',
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await deleteKnowledge(item.id)
+    toast.success(`已删除「${item.title}」`)
     load()
   } catch (e) {
-    alert('删除失败：' + errText(e))
+    toast.error('删除失败：' + errText(e))
   }
 }
 
@@ -93,7 +105,17 @@ onMounted(load)
                   <button class="btn btn-error btn-outline btn-xs" @click="remove(item)">删除</button>
                 </td>
               </tr>
-              <tr v-if="!items.length">
+              <!-- 首次加载显示骨架（与「暂无数据」区分开，避免被误读成库里真没有） -->
+              <template v-if="loading && !items.length">
+                <tr v-for="i in 5" :key="'sk' + i">
+                  <td><div class="skeleton h-4 w-56 max-w-full"></div></td>
+                  <td><div class="skeleton h-4 w-12"></div></td>
+                  <td><div class="skeleton h-4 w-16"></div></td>
+                  <td><div class="skeleton h-4 w-28"></div></td>
+                  <td><div class="skeleton h-4 w-12"></div></td>
+                </tr>
+              </template>
+              <tr v-if="!items.length && !loading">
                 <td colspan="5" class="text-center text-base-content/40 py-12">暂无数据</td>
               </tr>
             </tbody>

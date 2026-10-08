@@ -6,7 +6,7 @@
 import json
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -21,11 +21,39 @@ class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None   # 不传则开启新会话（透传给 Agent 用）
     history: list[dict] | None = None   # 兜底对话的历史（本服务不存对话，由调用方传入）
+    selected_ids: list[int] | None = None   # 「指定文档」模式：只用这几篇知识回答
+
+
+class PreselectRequest(BaseModel):
+    question: str
 
 
 def sse_event(event: str, data: dict) -> str:
     """拼一条 SSE 消息：event 行 + data 行 + 空行结尾"""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def kb_unavailable() -> HTTPException:
+    """kb-agent 不可用时统一报错（前端 catch 后在面板里提示）"""
+    return HTTPException(status_code=502, detail="kb-agent 服务不可用（未启动或超时）")
+
+
+@router.get("/catalog")
+def catalog():
+    """知识目录（转发）：聊天端左侧「指定文档」面板用"""
+    result = registry.get_catalog()
+    if result is None:
+        raise kb_unavailable()
+    return result
+
+
+@router.post("/preselect")
+def preselect(req: PreselectRequest):
+    """AI 预选文档（转发）：面板打开时给默认勾选"""
+    result = registry.preselect_documents(req.question)
+    if result is None:
+        raise kb_unavailable()
+    return result
 
 
 def record_call(question: str, intent_agent: str, answer_source: str, degraded: bool, duration_ms: int):
@@ -59,7 +87,7 @@ def chat(req: ChatRequest):
     # 路由：knowledge → 转发 kb-agent；其余 → 兜底对话
     if agent == "knowledge":
         if registry.is_available(agent):
-            result = registry.ask_knowledge(req.question, req.session_id)
+            result = registry.ask_knowledge(req.question, req.session_id, req.selected_ids)
             if result:
                 answer = result.get("answer", "")
                 sources = result.get("sources", [])
@@ -117,7 +145,7 @@ def chat_stream(req: ChatRequest):
         if agent == "knowledge":
             if registry.is_available(agent):
                 try:
-                    for line in registry.stream_knowledge(req.question, req.session_id):
+                    for line in registry.stream_knowledge(req.question, req.session_id, req.selected_ids):
                         yield line
                     record["answer_source"] = "knowledge"
                     return

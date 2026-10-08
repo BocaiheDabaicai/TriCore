@@ -14,7 +14,17 @@ export const INTERFACE_GROUPS = [
       {
         method: 'POST', path: '/api/v1/chat/stream',
         desc: '流式问答（SSE 打字机效果）',
-        detail: '按 meta → delta → done 三段事件推送；知识库的流式回答字节级原样透传（透传层的铁律：不顺手改格式，换行协议动一处就全断）。前端边收边渲染，用户中途关掉也会落库。',
+        detail: '按 meta → delta → done 三段事件推送；知识库的流式回答字节级原样透传（透传层的铁律：不顺手改格式，换行协议动一处就全断）。前端边收边渲染，用户中途关掉也会落库。请求可带 selected_ids（指定文档模式），调度器原样透传给知识库。',
+      },
+      {
+        method: 'GET', path: '/api/v1/catalog',
+        desc: '知识目录（代理转发）',
+        detail: '左侧「指定文档」面板的清单：每条只有标题 / 分类 / 类型 / 关键词，不含正文。面板收起时前端不发这个请求。',
+      },
+      {
+        method: 'POST', path: '/api/v1/preselect',
+        desc: 'AI 预选文档（代理转发）',
+        detail: '把目录整体交给 LLM，按当前问题挑出最相关的 ≤5 篇作为默认勾选；目录超过 60 条时先向量粗排取 20 条候选再挑。用户可增删，预选失败就返回空、由用户自己勾。',
       },
     ],
   },
@@ -38,8 +48,18 @@ export const INTERFACE_GROUPS = [
       },
       {
         method: 'POST', path: '/api/v1/admin/kb/upload',
-        desc: '上传知识文件（代理转发）',
-        detail: 'multipart 原样透传（txt / md / pdf / docx）。知识库收到后：解析 → LLM 识别分类 → 入库 → 自动分块向量化，立刻可问答。这条链就是"管理端发起 → 调度器中转 → 知识库处理"。',
+        desc: '上传知识文件（代理转发，支持批量）',
+        detail: 'multipart 原样透传（txt / md / pdf / docx / 图片 png、jpg、jpeg、webp）。知识库收到后：解析 → LLM 识别分类 → 入库 → 自动分块向量化，立刻可问答；同时生成关键词与摘要（摘要供广度·汇总类问题使用）。解析分两路：有文字层的 PDF 页用 pypdf 直接取字（免费零误差），没有文字层的页（扫描件）与图片文件用 PyMuPDF 渲染后交大模型视觉转写（按页计费，扫描件耗时上分钟级）。批量上传由前端并发池实现（后端仍是单文件接口），逐文件显示进度与状态。这条链就是"管理端发起 → 调度器中转 → 知识库处理"。注意上传路由是**同步 def**：解析 / 分类 / 向量化都是阻塞调用，同步路由会被丢进线程池，多个文件真并行且不冻住事件循环（否则上传期间问答会被卡、探活超时还会把服务重启）。',
+      },
+      {
+        method: 'POST', path: '/api/v1/admin/kb/missed/{id}/draft',
+        desc: 'AI 起草补充资料骨架（代理转发）',
+        detail: '未命中闭环的第一步：按未命中问题起草标题 / 分类 / 关键词 / 正文骨架。AI 只搭框架、绝不编造具体规定，正文里用【待补充】占位，由人工填实再入库。',
+      },
+      {
+        method: 'POST', path: '/api/v1/admin/kb/knowledge/create',
+        desc: '手工创建知识（代理转发）',
+        detail: '未命中闭环的第二步：人工编辑完草稿后入库，摘要未传则由 LLM 生成；入库即完成分块向量化，随后自动删掉对应的未命中记录。',
       },
       {
         method: 'DELETE', path: '/api/v1/admin/kb/knowledge/{id}',
@@ -89,7 +109,12 @@ export const INTERFACE_GROUPS = [
       {
         method: 'POST', path: '/api/v1/agent/chat/stream',
         desc: '问答转发（唯一对接接口，SSE 透传）',
-        detail: '调度器路由到知识库后调用的唯一问答接口；知识库内部再做 宽度/深度 分流检索与生成。曾因透传层丢换行导致流式界面永远"思考中"，修复后此处是字节级转发。',
+        detail: '调度器路由到知识库后调用的唯一问答接口；知识库内部做四路分流——深度·自由问答（向量检索）/ 深度·指定文档（勾选文档全文）/ 广度·枚举（查表列清单）/ 广度·汇总（全部摘要综合）。曾因透传层丢换行导致流式界面永远"思考中"，修复后此处是字节级转发。',
+      },
+      {
+        method: 'GET·POST', path: '/api/v1/agent/catalog · /api/v1/agent/preselect',
+        desc: '目录与 AI 预选（承接聊天端流量）',
+        detail: '「指定文档」面板的数据来源：catalog 给全量目录（不含正文），preselect 让 LLM 按问题挑 ≤5 篇做默认勾选。',
       },
       {
         method: 'GET·POST·DELETE', path: '/api/v1/knowledge/* · /api/v1/missed*',
@@ -140,6 +165,66 @@ export const INTERFACE_GROUPS = [
         method: 'GET', path: '/api/sources',
         desc: '寻文站点列表',
         detail: '寻文页数据来源；站点按类型（工程管理 / AI·计算机 / Web3·区块链）分组展示。',
+      },
+    ],
+  },
+  {
+    fromKey: 'rpa-frontend', toKey: 'rpa-agent', note: '独立体系（不与集群互通，自带操作台）',
+    items: [
+      {
+        method: 'GET', path: '/api/v1/browser',
+        desc: '浏览器状态：开没开、忙不忙、心跳、用户目录、目标系统网址',
+        detail: '操作台每 5 秒拉一次。心跳是执行器"还活着"的信号——长步骤里每走一步刷新一次，界面据此判断它是卡住了还是在正常干活。',
+      },
+      {
+        method: 'POST', path: '/api/v1/browser/open',
+        desc: '打开浏览器（懒启动，可顺带打开某个网址）',
+        detail: '服务启动时不拉浏览器，第一次点这里才拉：headful 浏览器冷启动 1~3 秒，放在启动路径会拖超 manager 的 30 秒启动窗口。登录（账号 + 验证码）在打开的窗口里人工完成，登录态落盘到 data/browser_profile，之后不用反复登。',
+      },
+      {
+        method: 'POST', path: '/api/v1/browser/close',
+        desc: '关闭浏览器（登录态保留）',
+        detail: '干净地走 Playwright 的 context.close + driver.stop；只把引用置空会让驱动进程挂着，下次在同一线程再起一个驱动会出怪问题。',
+      },
+      {
+        method: 'POST', path: '/api/v1/browser/kill-orphans',
+        desc: '强制结束残留浏览器进程（运维救急）',
+        detail: '服务被重启/崩溃后浏览器子进程可能还占着用户目录，导致下次启动失败。它先干净关闭自己的连接，再按命令行里带本服务 profile 目录的条件结束进程（匹配在 Python 里做：路径反斜杠/正斜杠两种写法都要认）。',
+      },
+      {
+        method: 'GET', path: '/api/v1/units',
+        desc: '单元清单：声明（输入字段 / 步骤 / 环境） + 人工验证状态 + 最近一次运行',
+        detail: '单元 = 一条业务数据 × 一个操作环节，靠 units/*.py 里的 UNIT 声明 + run(ctx) 自动注册，加单元不用改框架。人工验证是"双判定"的一半：系统只能判定脚本没报错，结果对不对要人核对过才算跑通。',
+      },
+      {
+        method: 'POST', path: '/api/v1/units/{key}/run',
+        desc: '投一次运行（入队返回 run_id，进度靠轮询）',
+        detail: '先按声明的必填字段校验输入，再建运行记录、把任务投进浏览器队列，立刻返回——不等执行完。执行器正忙则返回 409 且不排队（RPA 操作有前后依赖，悄悄排队会让人以为没点上）。',
+      },
+      {
+        method: 'GET', path: '/api/v1/runs/{id}',
+        desc: '运行详情：状态 + 每步状态与耗时 + 截图 + 最近日志',
+        detail: '进度用"步骤列表 + 当前第几步"表达，不用百分比（各步耗时差异太大，百分比会撒谎）。结束状态：success / failed / canceled / interrupted（服务重启打断）。',
+      },
+      {
+        method: 'POST', path: '/api/v1/runs/{id}/cancel',
+        desc: '取消运行（协作式：停在当前步骤边界）',
+        detail: '只置一个取消开关，由单元在步骤之间检查退出——不硬杀，避免留下半填的表单。',
+      },
+      {
+        method: 'POST', path: '/api/v1/units/{key}/verify',
+        desc: '人工标记"这个单元真跑通了"',
+        detail: '写 unit_meta 表（不改单元源码）。真实单元光看"页面提示保存成功"不算数，必须人打开目标系统核对过结果。',
+      },
+      {
+        method: 'POST', path: '/api/v1/shots',
+        desc: '上传页面截图（截图资料库）',
+        detail: '写单元的选择器之前必须看清目标页面长什么样：截图传到这里，AI 读磁盘上的图来认清字段与按钮。将来元素定位失败时，这些图也是视觉兜底的素材。',
+      },
+      {
+        method: 'GET', path: '/api/v1/stats',
+        desc: '统计：运行次数 / 已验证单元数 / 截图数',
+        detail: '给管理端「数据」视角报数用；admin-frontend 经 /rpa 代理直连它（只读查看，与 /study、/ops 同理）。',
       },
     ],
   },

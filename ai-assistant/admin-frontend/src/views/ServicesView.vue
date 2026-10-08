@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import { getLogs, getServices, restartService, startAll, startService, stopAll, stopService } from '../api/services'
 import { usePolling } from '../composables/usePolling'
+import { useConfirmStore } from '../stores/confirm'
+import { useToastStore } from '../stores/toast'
 import { errText } from '../utils/error'
 import { fmtUptime } from '../utils/format'
 import { STATUS_META } from '../utils/meta'
@@ -11,8 +13,19 @@ import PageHeader from '../components/PageHeader.vue'
 const services = ref([])
 const error = ref('')
 const busy = ref('')        // 正在操作的服务名（按钮 loading）
+const busyKind = ref('')    // 正在操作的动作（start/stop/restart）
 const logTarget = ref(null) // 日志弹窗显示的服务名
 const logContent = ref('')
+
+const confirmDialog = useConfirmStore()
+const toast = useToastStore()
+
+// 行内操作的元信息：标题文案 / 对应接口 / 有 tip 就说明需要二次确认
+const ACTIONS = {
+  start: { label: '启动', api: startService },
+  stop: { label: '停止', tip: '停止后该服务不可用，可在本页重新启动。', danger: true, api: stopService },
+  restart: { label: '重启', tip: '重启会短暂中断该服务（几秒）。', api: restartService },
+}
 
 async function refresh() {
   try {
@@ -23,23 +36,47 @@ async function refresh() {
   }
 }
 
-async function operate(name, action) {
-  busy.value = name
+async function operate(s, kind) {
+  const { label, api, tip, danger } = ACTIONS[kind]
+  const cn = s.cn_name || s.name
+  if (tip) {
+    const ok = await confirmDialog.confirm({
+      title: `${label}「${cn}」？`,
+      message: `服务名：${s.name}（端口 ${s.port}）。${tip}`,
+      confirmText: label,
+      danger: !!danger,
+    })
+    if (!ok) return
+  }
+  busy.value = s.name
+  busyKind.value = kind
   try {
-    await action(name)
+    await api(s.name)
+    toast.success(`${cn} 已${label}`)
   } catch (e) {
-    error.value = errText(e, `${name} 操作失败`)
+    toast.error(errText(e, `${cn} ${label}失败`))
   } finally {
     busy.value = ''
+    busyKind.value = ''
     await refresh()
   }
 }
 
-async function runAll(action) {
+async function operateAll(kind) {
+  if (kind === 'stop') {
+    const ok = await confirmDialog.confirm({
+      title: '全部停止？',
+      message: 'services.json 里的全部服务都会被停止——本管理端页面本身也在其中，停止后此页将无法再操作（需重新拉起管理端前端恢复）。',
+      confirmText: '全部停止',
+      danger: true,
+    })
+    if (!ok) return
+  }
   try {
-    await action()
+    await (kind === 'stop' ? stopAll : startAll)()
+    toast.success(kind === 'stop' ? '已全部停止' : '已全部启动')
   } catch (e) {
-    error.value = errText(e, '操作失败')
+    toast.error(errText(e, '操作失败'))
   } finally {
     await refresh()
   }
@@ -60,8 +97,8 @@ usePolling(refresh, 5000)   // 与 manager 探活周期一致
     <PageHeader title="服务管理" desc="各 Agent 服务的启动、停止与运行状态（manager 8002）">
       <template #actions>
         <button class="btn btn-sm btn-outline" @click="refresh()">刷新</button>
-        <button class="btn btn-sm btn-primary" @click="runAll(startAll)">全部启动</button>
-        <button class="btn btn-sm btn-outline btn-error" @click="runAll(stopAll)">全部停止</button>
+        <button class="btn btn-sm btn-primary" @click="operateAll('start')">全部启动</button>
+        <button class="btn btn-sm btn-outline btn-error" @click="operateAll('stop')">全部停止</button>
       </template>
     </PageHeader>
 
@@ -115,19 +152,21 @@ usePolling(refresh, 5000)   // 与 manager 探活周期一致
                     <button
                       class="btn btn-xs"
                       :disabled="busy === s.name || s.status === 'running' || s.status === 'starting'"
-                      @click="operate(s.name, startService)"
+                      @click="operate(s, 'start')"
                     >
-                      <span v-if="busy === s.name" class="loading loading-spinner loading-xs"></span>
+                      <span v-if="busy === s.name && busyKind === 'start'" class="loading loading-spinner loading-xs"></span>
                       启动
                     </button>
                     <button
                       class="btn btn-xs"
                       :disabled="busy === s.name || s.status === 'stopped'"
-                      @click="operate(s.name, stopService)"
+                      @click="operate(s, 'stop')"
                     >
+                      <span v-if="busy === s.name && busyKind === 'stop'" class="loading loading-spinner loading-xs"></span>
                       停止
                     </button>
-                    <button class="btn btn-xs" :disabled="busy === s.name" @click="operate(s.name, restartService)">
+                    <button class="btn btn-xs" :disabled="busy === s.name" @click="operate(s, 'restart')">
+                      <span v-if="busy === s.name && busyKind === 'restart'" class="loading loading-spinner loading-xs"></span>
                       重启
                     </button>
                     <button class="btn btn-xs btn-ghost" @click="openLogs(s.name)">日志</button>

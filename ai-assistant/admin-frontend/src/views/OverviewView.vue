@@ -7,6 +7,7 @@ import PageHeader from '../components/PageHeader.vue'
 // 总览页：各 Agent 在线状态 + 调度器调用统计（数据来自 ai-assistant 的 calls 表）
 const overview = ref(null)
 const calls = ref([])
+const loading = ref(true)
 const error = ref('')
 
 const SOURCE_LABELS = { knowledge: 'kb-agent', general: '兜底对话', none: '未配置 LLM' }
@@ -30,6 +31,8 @@ onMounted(async () => {
     calls.value = (await getCalls(20)).data
   } catch (e) {
     error.value = '调度服务未连接，请先启动 ai-assistant（8001）'
+  } finally {
+    loading.value = false
   }
 })
 </script>
@@ -40,7 +43,34 @@ onMounted(async () => {
 
     <div v-if="error" role="alert" class="alert alert-warning">{{ error }}</div>
 
-    <template v-if="overview">
+    <!-- 首次加载骨架：先占位再换真数据，避免整页空白 -->
+    <template v-if="loading">
+      <div class="stats stats-vertical lg:stats-horizontal shadow w-full bg-base-100">
+        <div v-for="i in 4" :key="i" class="stat">
+          <div class="skeleton h-4 w-20"></div>
+          <div class="skeleton h-8 w-24 mt-2"></div>
+        </div>
+      </div>
+      <div class="card bg-base-100 shadow">
+        <div class="card-body">
+          <h2 class="card-title text-base">Agent 状态</h2>
+          <div class="grid grid-cols-2 xl:grid-cols-4 gap-4">
+            <div v-for="i in 4" :key="i" class="rounded-box border border-base-300 p-4">
+              <div class="skeleton h-4 w-24"></div>
+              <div class="skeleton h-3 w-32 mt-3"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card bg-base-100 shadow">
+        <div class="card-body space-y-2">
+          <div class="skeleton h-5 w-28 mb-2"></div>
+          <div v-for="i in 5" :key="i" class="skeleton h-4 w-full"></div>
+        </div>
+      </div>
+    </template>
+
+    <template v-else-if="overview">
       <!-- 调用统计 -->
       <div class="stats stats-vertical lg:stats-horizontal shadow w-full bg-base-100">
         <div class="stat">

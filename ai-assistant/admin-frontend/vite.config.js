@@ -27,6 +27,12 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/study/, '/api'),
       },
+      // 办公自动化执行器（只读统计，数据视图用）：独立体系，有自己的操作台（5176），管理端只借它看数字
+      '/rpa': {
+        target: 'http://localhost:8004',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/rpa/, '/api'),
+      },
     },
   },
 })

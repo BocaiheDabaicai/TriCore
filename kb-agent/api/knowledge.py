@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from core.database import SessionLocal
 from models.knowledge import Knowledge
 from services.file_parser import parse_file
-from services.llm_service import is_configured, classify_upload
+from services.llm_service import is_configured, classify_upload, summarize
 from services.embedding_service import (
     is_configured as embed_is_configured,
     sync_vector,
@@ -43,6 +43,7 @@ class KnowledgeCreate(BaseModel):
     content: str
     steps: list[dict] | None = None   # 仅 workflow 使用：[{"order":1,"name":"...","role":"..."}]
     keywords: str | None = None       # 可选：手动指定关键词，不传则没有（宽度回答只显示标题）
+    summary: str | None = None        # 可选：不传则由 LLM 生成（广度·汇总用）
 
 
 class KnowledgeUpdate(BaseModel):
@@ -53,6 +54,7 @@ class KnowledgeUpdate(BaseModel):
     content: str | None = None
     steps: list[dict] | None = None
     keywords: str | None = None
+    summary: str | None = None
 
 
 def item_to_dict(item: Knowledge) -> dict:
@@ -71,6 +73,7 @@ def item_to_dict(item: Knowledge) -> dict:
         "content": item.content,
         "steps": steps,
         "keywords": item.keywords,
+        "summary": item.summary,
         "filename": item.filename,
         "created_at": item.created_at.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -84,7 +87,7 @@ def normalize_kind(kind: str | None) -> str:
 # ---- 统一上传 ----
 
 @router.post("/upload")
-async def upload_knowledge(
+def upload_knowledge(
     file: UploadFile = File(...),
     kind: str | None = Form(default=None, description="可选：手动指定类型，不传则 LLM 自动识别"),
     category: str | None = Form(default=None, description="可选：业务分类，如 人事/财务"),
@@ -92,9 +95,14 @@ async def upload_knowledge(
 ):
     """
     统一上传入口：接收文件 → 解析文本 → LLM 识别类型 → 入库 → 自动分块向量化
-    支持 txt / md / pdf / docx
+    支持 txt / md / pdf / docx / 图片（png、jpg、jpeg、webp）；
+    PDF 里没有文字层的页、以及图片文件本身，走视觉转写（见 file_parser）
+
+    注意这里是同步 def 而不是 async def：解析 / LLM 分类 / 向量化全是阻塞调用，
+    放在 async 路由里会冻住整个事件循环（问答被卡、manager 探活超时甚至把服务重启）；
+    同步 def 会被 FastAPI 丢进线程池，多个上传各自占一个线程，互不阻塞
     """
-    raw = await file.read()
+    raw = file.file.read()
     try:
         text = parse_file(file.filename, raw)
     except ValueError as e:
@@ -121,6 +129,7 @@ async def upload_knowledge(
     final_category = category or (result["category"] if result else None) or "未分类"
     steps = result["steps"] if (result and final_kind == "workflow") else None
     final_keywords = result["keywords"] if result else None
+    final_summary = result["summary"] if result else None   # 摘要与分类同一次 LLM 调用生成
 
     item = Knowledge(
         title=final_title,
@@ -129,6 +138,7 @@ async def upload_knowledge(
         content=text,
         steps_json=json.dumps(steps, ensure_ascii=False) if steps else None,
         keywords=final_keywords,
+        summary=final_summary,
         filename=file.filename,
     )
     db.add(item)
@@ -175,6 +185,11 @@ def get_knowledge(item_id: int, db: Session = Depends(get_db)):
 
 @router.post("/create")
 def create_knowledge(req: KnowledgeCreate, db: Session = Depends(get_db)):
+    # 摘要没传就现生成（管理端补充知识走这条；失败不阻断，之后可用补录脚本补）
+    summary = req.summary
+    if not summary and is_configured():
+        summary = summarize(req.title, req.content)
+
     item = Knowledge(
         title=req.title,
         category=req.category,
@@ -182,6 +197,7 @@ def create_knowledge(req: KnowledgeCreate, db: Session = Depends(get_db)):
         content=req.content,
         steps_json=json.dumps(req.steps, ensure_ascii=False) if req.steps else None,
         keywords=req.keywords,
+        summary=summary,
     )
     db.add(item)
     db.commit()
@@ -213,6 +229,11 @@ def update_knowledge(item_id: int, req: KnowledgeUpdate, db: Session = Depends(g
         item.steps_json = json.dumps(req.steps, ensure_ascii=False)
     if req.keywords is not None:
         item.keywords = req.keywords
+    if req.summary is not None:
+        item.summary = req.summary
+    elif req.content is not None and is_configured():
+        # 正文改了但没传新摘要 → 摘要跟着重生成，否则汇总回答会用过期内容
+        item.summary = summarize(item.title, item.content)
 
     db.commit()
     db.refresh(item)

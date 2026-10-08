@@ -35,5 +35,9 @@ class Knowledge(Base):
     # 用途：宽度回答时列"标题+关键词"当目录，用户点名后走深度查询
     keywords: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
+    # 内容摘要（100 字内，含关键标准/数字）：入库时由 LLM 生成
+    # 用途：广度·汇总/比较类问题不做向量检索，直接把全部摘要喂给模型做跨文档综合
+    summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)

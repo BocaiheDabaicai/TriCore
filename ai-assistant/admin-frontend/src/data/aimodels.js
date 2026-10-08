@@ -10,12 +10,22 @@ export const AI_USAGES = [
       {
         task: '问答生成',
         model: 'DeepSeek（V4 Flash）',
-        detail: '宽 / 深度问题判断、RAG 回答生成、答不上来时的诚实兜底话术',
+        detail: '枚举 / 汇总 / 深度三维判断、RAG 回答生成（深度·指定文档·汇总三种提示词）、答不上来时的诚实兜底话术',
       },
       {
         task: '上传理解',
         model: 'DeepSeek（V4 Flash）',
-        detail: 'classify_upload：识别 kind（制度 / 文档 / 流程）、拟定分类、生成关键词',
+        detail: 'classify_upload：识别 kind（制度 / 文档 / 流程）、拟定分类、生成关键词与摘要',
+      },
+      {
+        task: '摘要生成',
+        model: 'DeepSeek（V4 Flash）',
+        detail: '入库时随分类一起生成（含关键数字）；存量数据用 backfill_summary.py 补录——供「广度·汇总」类问题整篇喂给模型做跨文档综合',
+      },
+      {
+        task: 'AI 预选 / 起草',
+        model: 'DeepSeek（V4 Flash）',
+        detail: '聊天端指定文档的默认勾选（preselect_documents）、管理端未命中问题的补充资料骨架（draft_supplement，只搭框架不编造）',
       },
       {
         task: '向量化',
@@ -49,6 +59,19 @@ export const AI_USAGES = [
         task: '暂无 AI',
         model: '—',
         detail: '下一步规划：LLM 辅助整理笔记 / 生成摘要——接入方式照 kb-agent/services/llm_service.py 的模式',
+      },
+    ],
+  },
+  {
+    ownerKey: 'rpa-agent',
+    config: '暂无 AI 配置（执行层刻意不用模型，先不引入 .env 里的 LLM 项）',
+    items: [
+      {
+        task: '无 AI 依赖',
+        model: '—',
+        detail: '执行层是确定性脚本：模型临场决定"点哪个按钮、填什么值"一旦出错就是往生产系统写脏数据。'
+          + 'AI 将来只放在两头——前面把 OA 里的非结构化内容读成结构化字段、后面在元素定位失败时做视觉兜底；'
+          + '中间的操作动作始终由固定选择器完成。',
       },
     ],
   },

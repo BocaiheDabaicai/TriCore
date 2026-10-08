@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+
+# 运行期数据：浏览器 profile 里有登录 cookie、截图里有企业数据，都不进 git
+data/
+logs/
+rpa_agent.db
+
+# 前端
+frontend/node_modules/
+frontend/dist/

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { getOverview } from '../../api/admin'
 import { listKnowledge, listMissed } from '../../api/kb'
+import { getRpaStats } from '../../api/rpa'
 import { listReadings, listSources } from '../../api/study'
 import { DATASTORES } from '../../data/datastores'
 import { usePolling } from '../../composables/usePolling'
@@ -11,27 +12,34 @@ defineProps({
   nameMap: { type: Object, required: true },
 })
 
-const counts = ref({})   // { calls, knowledge, missed, readings, sources, attachments }
+const counts = ref({})   // { calls, knowledge, missed, readings, sources, attachments, runs, shots }
+const loaded = ref(false) // 首次加载完成前数量位显示「…」（与"服务没起"的「—」区分）
 
 async function loadCounts() {
+  // 六个请求并发发出；allSettled 保证单个服务没起也不影响其它（该项留空 → 显示「—」）
+  const [calls, k, m, r, s, rpa] = await Promise.allSettled([
+    getOverview(),
+    listKnowledge(),
+    listMissed(),
+    listReadings(),
+    listSources(),
+    getRpaStats(),
+  ])
   const c = {}
-  // 逐项容错：某个服务没起时该项留空（页面显示"—"），不影响其它
-  try { c.calls = (await getOverview()).stats?.total_calls } catch { /* 调度器未起 */ }
-  try {
-    const k = await listKnowledge()
-    c.knowledge = Array.isArray(k.data) ? k.data.length : k.total
-  } catch { /* 知识库未起 */ }
-  try {
-    const m = await listMissed()
-    c.missed = Array.isArray(m.data) ? m.data.length : m.total
-  } catch { /* 知识库未起 */ }
-  try {
-    const r = await listReadings()
-    c.readings = r.total
-    c.attachments = (r.data || []).filter((x) => x.attachment).length
-  } catch { /* 研读后端未起 */ }
-  try { c.sources = (await listSources()).total } catch { /* 研读后端未起 */ }
+  if (calls.status === 'fulfilled') c.calls = calls.value.stats?.total_calls
+  if (k.status === 'fulfilled') c.knowledge = Array.isArray(k.value.data) ? k.value.data.length : k.value.total
+  if (m.status === 'fulfilled') c.missed = Array.isArray(m.value.data) ? m.value.data.length : m.value.total
+  if (r.status === 'fulfilled') {
+    c.readings = r.value.total
+    c.attachments = (r.value.data || []).filter((x) => x.attachment).length
+  }
+  if (s.status === 'fulfilled') c.sources = s.value.total
+  if (rpa.status === 'fulfilled') {
+    c.runs = rpa.value.data?.runs
+    c.shots = rpa.value.data?.shots
+  }
   counts.value = c
+  loaded.value = true
 }
 
 usePolling(loadCounts)
@@ -56,7 +64,7 @@ usePolling(loadCounts)
               class="badge badge-sm shrink-0"
               :class="counts[t.live] != null ? 'badge-primary badge-outline' : 'badge-ghost'"
             >
-              {{ counts[t.live] != null ? counts[t.live] + ' 条' : '—' }}
+              {{ !loaded ? '…' : counts[t.live] != null ? counts[t.live] + ' 条' : '—' }}
             </span>
           </div>
 
@@ -66,7 +74,7 @@ usePolling(loadCounts)
               class="badge badge-sm shrink-0"
               :class="counts[d.extra.live] != null ? 'badge-primary badge-outline' : 'badge-ghost'"
             >
-              {{ counts[d.extra.live] != null ? counts[d.extra.live] + ' 个' : '—' }}
+              {{ !loaded ? '…' : counts[d.extra.live] != null ? counts[d.extra.live] + ' 个' : '—' }}
             </span>
           </div>
         </div>

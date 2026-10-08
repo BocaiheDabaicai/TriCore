@@ -33,15 +33,16 @@ def is_available(agent: str) -> bool:
         return False
 
 
-def ask_knowledge(question: str, session_id: str | None) -> dict | None:
+def ask_knowledge(question: str, session_id: str | None, selected_ids: list[int] | None = None) -> dict | None:
     """
     调用 kb-agent 一次性问答（转 HTTP）
+    - selected_ids：聊天端「指定文档」模式勾选的文档 id，非空时 kb-agent 只用这几篇回答
     失败（没启动/超时/报错）返回 None，由调用方降级兜底
     """
     try:
         r = httpx.post(
             f"{KB_AGENT_URL}/api/v1/agent/chat",
-            json={"question": question, "session_id": session_id},
+            json={"question": question, "session_id": session_id, "selected_ids": selected_ids},
             timeout=60.0,
         )
         r.raise_for_status()  # 如果这次 HTTP 请求的响应状态码是错误（4xx/5xx），就立刻抛出异常。
@@ -50,7 +51,31 @@ def ask_knowledge(question: str, session_id: str | None) -> dict | None:
         return None
 
 
-def stream_knowledge(question: str, session_id: str | None):
+def get_catalog() -> dict | None:
+    """取 kb-agent 的知识目录（聊天端「指定文档」面板用）；失败返回 None"""
+    try:
+        r = httpx.get(f"{KB_AGENT_URL}/api/v1/agent/catalog", timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+def preselect_documents(question: str) -> dict | None:
+    """让 kb-agent 的 AI 预选文档（面板打开时给默认勾选）；失败返回 None"""
+    try:
+        r = httpx.post(
+            f"{KB_AGENT_URL}/api/v1/agent/preselect",
+            json={"question": question},
+            timeout=60.0,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+def stream_knowledge(question: str, session_id: str | None, selected_ids: list[int] | None = None):
     """
     调用 kb-agent 流式问答，逐行透传 SSE（原样转发，不解析不改写）
     生成器产出的是 SSE 原始行（event:/data:/空行），调用方直接 yield 给前端
@@ -58,7 +83,7 @@ def stream_knowledge(question: str, session_id: str | None):
     with httpx.stream(
             "POST",
             f"{KB_AGENT_URL}/api/v1/agent/chat/stream",
-            json={"question": question, "session_id": session_id},
+            json={"question": question, "session_id": session_id, "selected_ids": selected_ids},
             timeout=60.0,
     ) as r:
         r.raise_for_status()
