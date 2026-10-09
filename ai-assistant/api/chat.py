@@ -5,6 +5,7 @@
 
 import json
 import time
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 
 from core.database import SessionLocal
 from models.call import Call
+from models.conversation import ChatMessage, Conversation
 from services import llm_service, registry
 
 router = APIRouter(prefix="/api/v1", tags=["统一问答"])
@@ -72,6 +74,35 @@ def record_call(question: str, intent_agent: str, answer_source: str, degraded: 
         db.close()
 
 
+def save_round(question: str, answer: str, session_id: str | None, answer_source: str,
+               sources: list | None = None, retrieval_method: str = "", degraded: bool = False):
+    """
+    一轮问答落库（对话记录）：upsert 会话 + 插 user/assistant 两行
+    闸门：会话 id 为空 / 回答为空 / 来源是 none（如"未配置大模型"的固定文案）→ 整轮不落库
+    meta 存实际回答来源而不是意图名 —— 降级轮（想走 knowledge 实际走 general）不能标错
+    """
+    if not session_id or not answer or answer_source not in ("knowledge", "general"):
+        return
+    meta = {"source": answer_source, "retrieval": retrieval_method, "degraded": degraded}
+    if sources:
+        meta["sources"] = sources
+
+    db = SessionLocal()
+    try:
+        now = datetime.now()
+        conv = db.query(Conversation).filter(Conversation.session_id == session_id).first()
+        if conv:
+            conv.updated_at = now
+        else:
+            db.add(Conversation(session_id=session_id, title=question[:50], created_at=now, updated_at=now))
+        db.add(ChatMessage(session_id=session_id, role="user", content=question))
+        db.add(ChatMessage(session_id=session_id, role="assistant", content=answer,
+                           meta=json.dumps(meta, ensure_ascii=False)))
+        db.commit()
+    finally:
+        db.close()
+
+
 @router.post("/chat")
 def chat(req: ChatRequest):
     """统一问答：意图识别 → 路由到 Agent → 回答（一次性返回全文）"""
@@ -81,6 +112,7 @@ def chat(req: ChatRequest):
     degraded = False
     answer = ""
     sources = []
+    retrieval = ""
     session_id = req.session_id
     answer_source = "none"
 
@@ -91,6 +123,7 @@ def chat(req: ChatRequest):
             if result:
                 answer = result.get("answer", "")
                 sources = result.get("sources", [])
+                retrieval = result.get("retrieval_method", "")
                 session_id = result.get("session_id", req.session_id)
                 answer_source = "knowledge"
             else:
@@ -108,6 +141,10 @@ def chat(req: ChatRequest):
 
     # 记一笔调用（意图/实际来源/降级/耗时）—— 管理端调用统计的数据来源
     record_call(req.question, agent, answer_source, degraded, int((time.time() - start) * 1000))
+
+    # 对话记录落库（闸门在 save_round 内）
+    save_round(req.question, answer, session_id, answer_source,
+               sources=sources, retrieval_method=retrieval, degraded=degraded)
 
     resp = {
         "question": req.question,
@@ -132,6 +169,31 @@ def chat_stream(req: ChatRequest):
     agent = intent["agent"]
     # 生成器里随时可能 return/异常，用可变字典记录最终状态，finally 里统一落库
     record = {"answer_source": "none", "degraded": False}
+    # kb 透传流的旁路累积器：答案全文 / 来源 / 检索方式 / kb 下发的会话 id（对话记录落库用）
+    acc = {"answer": "", "sources": [], "retrieval": "", "session_id": None, "event": ""}
+
+    def consume(line: str, acc: dict):
+        """
+        旁路解析 kb-agent 透传过来的 SSE 行，累积答案与来源（透传本身仍是原样转发）
+        必须自吞一切异常 —— 解析报错冒泡会被外层当成"kb 失败"误判降级、客户端会收到两份答案
+        """
+        try:
+            line = line.strip()
+            if line.startswith("event:"):
+                acc["event"] = line[6:].strip()
+            elif line.startswith("data:"):
+                data = json.loads(line[5:].strip())
+                if acc["event"] == "meta":
+                    if data.get("sources"):
+                        acc["sources"] = data["sources"]
+                    if data.get("retrieval_method"):
+                        acc["retrieval"] = data["retrieval_method"]
+                    if data.get("session_id"):
+                        acc["session_id"] = data["session_id"]
+                elif acc["event"] == "delta":
+                    acc["answer"] += data.get("text", "")
+        except Exception:
+            pass
 
     def generate():
         # 先发 meta：调度信息 + 降级标记（前端可以显示"正在调用 xx Agent"）
@@ -146,11 +208,16 @@ def chat_stream(req: ChatRequest):
             if registry.is_available(agent):
                 try:
                     for line in registry.stream_knowledge(req.question, req.session_id, req.selected_ids):
+                        consume(line, acc)
                         yield line
                     record["answer_source"] = "knowledge"
                     return
                 except Exception:
                     record["degraded"] = True   # 透传中途失败 → 走下面的兜底对话
+                    # kb 半途失败的内容不落库（只存完整的兜底回答），来源也清掉
+                    acc["answer"] = ""
+                    acc["sources"] = []
+                    acc["retrieval"] = ""
             else:
                 record["degraded"] = True
 
@@ -160,6 +227,7 @@ def chat_stream(req: ChatRequest):
             return
 
         for delta in llm_service.stream_general(req.question, req.history):
+            acc["answer"] += delta
             yield sse_event("delta", {"text": delta})
         record["answer_source"] = "general"
         yield sse_event("done", {
@@ -168,11 +236,14 @@ def chat_stream(req: ChatRequest):
         })
 
     def generate_with_record():
-        # finally：无论流正常结束、降级还是客户端断开，都记一笔调用
+        # finally：无论流正常结束、降级还是客户端断开，都记一笔调用 + 落一轮对话记录
         try:
             yield from generate()
         finally:
             record_call(req.question, agent, record["answer_source"], record["degraded"],
                         int((time.time() - start) * 1000))
+            save_round(req.question, acc["answer"], req.session_id or acc["session_id"],
+                       record["answer_source"], sources=acc["sources"],
+                       retrieval_method=acc["retrieval"], degraded=record["degraded"])
 
     return StreamingResponse(generate_with_record(), media_type="text/event-stream")

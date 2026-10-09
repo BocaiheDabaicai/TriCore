@@ -39,6 +39,9 @@ watch(
   },
   { flush: 'post' },
 )
+
+// 切换会话（点开旧记录 / 新对话）后置底：直接看到最新一段
+watch(() => chat.sessionId, () => scrollToBottom(), { flush: 'post' })
 </script>
 
 <template>

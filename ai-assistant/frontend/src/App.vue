@@ -1,4 +1,5 @@
 <script setup>
+import SessionList from './components/SessionList.vue'
 import ChatHeader from './components/ChatHeader.vue'
 import MessageList from './components/MessageList.vue'
 import ChatInput from './components/ChatInput.vue'
@@ -8,11 +9,12 @@ import { useChatStore } from './stores/chat'
 const chat = useChatStore()
 
 // App 只做布局：三个组件各自从 store 取自己需要的数据
-// 左侧「指定文档」面板常挂载、收起时宽度 0；外层卡片配合它的展开一起变宽（见 style.css）
+// 三栏 = 对话记录（260px 固定）+ 指定文档面板（展开时挤窄聊天列）+ 聊天区铺满剩余
 </script>
 
 <template>
-  <div class="chat-page" :class="{ 'panel-open': chat.panelOpen }">
+  <div class="chat-page">
+    <SessionList />
     <DocPanel />
     <div class="chat-main">
       <ChatHeader />

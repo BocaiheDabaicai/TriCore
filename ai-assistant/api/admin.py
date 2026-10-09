@@ -10,6 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.config import KB_AGENT_URL
+from core.http_client import client as http_client
 from core.database import SessionLocal
 from models.call import Call
 from services import registry
@@ -101,7 +102,7 @@ def kb_list_knowledge(
 ):
     """转发：知识列表"""
     try:
-        r = httpx.get(
+        r = http_client.get(
             f"{KB_AGENT_URL}/api/v1/knowledge/list",
             params={"keyword": keyword, "category": category, "kind": kind},
             timeout=30.0,
@@ -116,7 +117,7 @@ def kb_list_knowledge(
 def kb_delete_knowledge(item_id: int):
     """转发：删除知识（向量索引由 kb-agent 一并清理）"""
     try:
-        r = httpx.delete(f"{KB_AGENT_URL}/api/v1/knowledge/{item_id}", timeout=30.0)
+        r = http_client.delete(f"{KB_AGENT_URL}/api/v1/knowledge/{item_id}", timeout=30.0)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:
@@ -140,7 +141,7 @@ def kb_upload(
     if category:
         data["category"] = category
     try:
-        r = httpx.post(
+        r = http_client.post(
             f"{KB_AGENT_URL}/api/v1/knowledge/upload",
             files={"file": (file.filename, file.file.read(), file.content_type)},
             data=data,
@@ -156,7 +157,7 @@ def kb_upload(
 def kb_draft_missed(missed_id: int):
     """转发：AI 起草补充资料骨架（含 LLM 调用，超时放宽）"""
     try:
-        r = httpx.post(f"{KB_AGENT_URL}/api/v1/missed/{missed_id}/draft", timeout=120.0)
+        r = http_client.post(f"{KB_AGENT_URL}/api/v1/missed/{missed_id}/draft", timeout=120.0)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:
@@ -167,7 +168,7 @@ def kb_draft_missed(missed_id: int):
 def kb_create_knowledge(payload: dict = Body(...)):
     """转发：手工创建知识（管理端补充未命中问题用，JSON 原样透传给 kb-agent 校验）"""
     try:
-        r = httpx.post(f"{KB_AGENT_URL}/api/v1/knowledge/create", json=payload, timeout=60.0)
+        r = http_client.post(f"{KB_AGENT_URL}/api/v1/knowledge/create", json=payload, timeout=60.0)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:
@@ -178,7 +179,7 @@ def kb_create_knowledge(payload: dict = Body(...)):
 def kb_list_missed(limit: int = Query(default=100, ge=1, le=500)):
     """转发：未命中问题清单（按被问次数排序）"""
     try:
-        r = httpx.get(f"{KB_AGENT_URL}/api/v1/missed", params={"limit": limit}, timeout=30.0)
+        r = http_client.get(f"{KB_AGENT_URL}/api/v1/missed", params={"limit": limit}, timeout=30.0)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:
@@ -189,7 +190,7 @@ def kb_list_missed(limit: int = Query(default=100, ge=1, le=500)):
 def kb_clear_missed():
     """转发：清空全部未命中记录"""
     try:
-        r = httpx.delete(f"{KB_AGENT_URL}/api/v1/missed", timeout=30.0)
+        r = http_client.delete(f"{KB_AGENT_URL}/api/v1/missed", timeout=30.0)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:
@@ -200,7 +201,7 @@ def kb_clear_missed():
 def kb_delete_missed(missed_id: int):
     """转发：删除一条未命中记录（对应知识已补充后）"""
     try:
-        r = httpx.delete(f"{KB_AGENT_URL}/api/v1/missed/{missed_id}", timeout=30.0)
+        r = http_client.delete(f"{KB_AGENT_URL}/api/v1/missed/{missed_id}", timeout=30.0)
         r.raise_for_status()
         return r.json()
     except httpx.HTTPError:

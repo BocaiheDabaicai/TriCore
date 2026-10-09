@@ -19,6 +19,8 @@ def ensure_new_columns():
             conn.exec_driver_sql("ALTER TABLE readings ADD COLUMN rating INTEGER DEFAULT 0")
         if "domains" not in cols:
             conn.exec_driver_sql("ALTER TABLE readings ADD COLUMN domains JSON DEFAULT '[]'")
+        if "lang" not in cols:
+            conn.exec_driver_sql("ALTER TABLE readings ADD COLUMN lang VARCHAR(10) DEFAULT 'zh'")
         conn.commit()
 
 

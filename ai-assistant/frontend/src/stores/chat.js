@@ -1,5 +1,8 @@
 import { defineStore } from 'pinia'
-import { fetchCatalog, preselectDocs, streamChat } from '../api/chat'
+import {
+  fetchCatalog, preselectDocs, streamChat,
+  fetchConversations, fetchConversation, deleteConversation,
+} from '../api/chat'
 
 // Agent 名称映射：消息上显示"哪个 Agent 回答的"
 export const AGENT_NAMES = { knowledge: '企业知识问答', general: '通用对话' }
@@ -9,13 +12,19 @@ function errText(e) {
   return e.response?.data?.detail || e.message
 }
 
+// 首轮发问时懒生成会话 id：session-{12hex}（kb-agent 接受任意非空 id，全链路共用同一个）
+function newSessionId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(6))
+  return 'session-' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 // 聊天状态（Options 写法）：state 放数据、actions 放方法，结构分区直观
 // 和 setup 写法对外暴露的东西完全一样，组件不用改
 export const useChatStore = defineStore('chat', {
   // state：数据 —— 必须是函数返回对象（每个使用方各拿一份，互不共享）
   state: () => ({
     messages: [],      // [{ role, content, agent, sources, retrieval, done, error }]（error 非空 = 这条回答失败，可重试）
-    sessionId: null,   // 后端 meta 事件下发，后续提问带上（多轮对话）
+    sessionId: null,   // 首轮发问懒生成，后续提问带上（多轮对话 + 对话记录归属）
     history: [],       // 兜底对话的历史（后端不存，前端记最近的传过去）
     loading: false,
     draft: '',         // 输入框草稿（放 store 是因为「AI 预选」要拿当前问题）
@@ -27,6 +36,13 @@ export const useChatStore = defineStore('chat', {
     selectedIds: [],     // 勾选的文档 id；非空 = 指定文档模式（随会话延续）
     preselecting: false,
     preselectError: '',
+
+    // 「对话记录」列表（左侧）
+    conversations: [],   // [{ session_id, title, updated_at, message_count }]
+    convLoading: false,
+    convError: '',
+    convOpeningId: null, // 正在打开的会话 id（打开期间列表禁点）
+    deletingId: null,    // 正在删除的会话 id
   }),
 
   getters: {
@@ -47,6 +63,8 @@ export const useChatStore = defineStore('chat', {
   actions: {
     async sendQuestion(question, { appendUser = true } = {}) {
       this.loading = true
+      // 首轮发问懒生成会话 id：空会话不落库，发过问才有记录
+      if (!this.sessionId) this.sessionId = newSessionId()
       if (appendUser) this.messages.push({ role: 'user', content: question })
       this.messages.push({ role: 'assistant', content: '', agent: '', sources: [], done: false, error: '' })
       // 取回数组里刚 push 的那条 —— 这样拿到的是响应式代理，改它界面才跟着变
@@ -83,6 +101,11 @@ export const useChatStore = defineStore('chat', {
         .slice(-10)
         .map((m) => ({ role: m.role, content: m.content }))
       this.loading = false
+
+      // 这一轮大概率已落库（有正文、无错误）→ 静默刷新列表，让新会话/标题/时间出现
+      if (this.sessionId && assistantMsg.content && !assistantMsg.error) {
+        this.loadConversations(true)
+      }
     },
 
     // 重试最后一条失败的回答：去掉失败气泡（用户问题保留），按原问题再问一次
@@ -99,9 +122,78 @@ export const useChatStore = defineStore('chat', {
     // 新对话：清空消息、会话与上下文（勾选的指定文档保留，可在作用域条一键清除）
     newSession() {
       if (this.loading) return
+      this.resetChat()
+    },
+
+    // 回空态：只重置内存，不落库（这个新会话要发过问、答成功才会出现在列表里）
+    resetChat() {
       this.messages = []
       this.sessionId = null
       this.history = []
+    },
+
+    // ---- 对话记录列表 ----
+
+    async loadConversations(silent = false) {
+      if (!silent) this.convLoading = true
+      this.convError = ''
+      try {
+        this.conversations = (await fetchConversations()).data || []
+      } catch (e) {
+        this.convError = '对话记录加载失败：' + errText(e)
+      } finally {
+        if (!silent) this.convLoading = false
+      }
+    },
+
+    // 点开旧会话：拉全部消息回放，并重建兜底对话历史（kb 上下文靠它自己的 messages 续接）
+    async openConversation(sessionId) {
+      if (this.loading || this.convOpeningId || this.deletingId || !sessionId || sessionId === this.sessionId) return
+      this.convOpeningId = sessionId
+      this.convError = ''
+      try {
+        const detail = (await fetchConversation(sessionId)).data
+        if (!detail) {
+          // 已在别处被删：从列表剔除；若正是当前会话 → 回空态
+          this.conversations = this.conversations.filter((c) => c.session_id !== sessionId)
+          if (sessionId === this.sessionId) this.resetChat()
+          return
+        }
+        this.messages = detail.messages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          agent: m.role === 'assistant' ? (m.meta?.source || '') : '',
+          sources: m.meta?.sources || [],
+          retrieval: m.meta?.retrieval || '',
+          done: true,
+          error: '',
+        }))
+        this.sessionId = detail.session_id
+        this.history = this.messages
+          .filter((m) => m.content)
+          .slice(-10)
+          .map((m) => ({ role: m.role, content: m.content }))
+      } catch (e) {
+        this.convError = '打开会话失败：' + errText(e)
+      } finally {
+        this.convOpeningId = null
+      }
+    },
+
+    // 删除会话：删的是当前打开的 → 回空态
+    async removeConversation(sessionId) {
+      if (this.deletingId || this.loading) return
+      this.deletingId = sessionId
+      this.convError = ''
+      try {
+        await deleteConversation(sessionId)
+        this.conversations = this.conversations.filter((c) => c.session_id !== sessionId)
+        if (sessionId === this.sessionId) this.resetChat()
+      } catch (e) {
+        this.convError = '删除失败：' + errText(e)
+      } finally {
+        this.deletingId = null
+      }
     },
 
     // ---- 指定文档面板 ----

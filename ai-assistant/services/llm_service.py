@@ -9,10 +9,21 @@ from openai import OpenAI
 
 from core.config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
 
-client = OpenAI(
-    api_key=LLM_API_KEY,
-    base_url=LLM_BASE_URL,
-)
+# OpenAI 客户端延迟创建：导入时不建——没配置 key 时 SDK 建客户端就抛错，
+# 服务会直接起不来，"未配置大模型"的降级分支永远走不到。
+# 只有真正要调模型时才创建（调用方都先过 is_configured / try 兜底），
+# 配置齐全后整个进程复用同一个客户端
+_client = None
+
+
+def get_client() -> OpenAI:
+    global _client
+    if _client is None:
+        _client = OpenAI(
+            api_key=LLM_API_KEY,
+            base_url=LLM_BASE_URL,
+        )
+    return _client
 
 # 已接入的 Agent 名单 —— 意图识别的提示词从这里生成，以后加 Agent 只改这里
 AGENTS = {
@@ -44,7 +55,7 @@ def classify_intent(question: str) -> dict:
     )
 
     try:
-        response = client.chat.completions.create(
+        response = get_client().chat.completions.create(
             model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -77,7 +88,7 @@ def _build_messages(history: list[dict], question: str) -> list[dict]:
 
 def chat_general(question: str, history: list[dict] | None = None) -> str:
     """通用对话（一次性返回全文）—— 历史由调用方传入，本服务不存对话"""
-    response = client.chat.completions.create(
+    response = get_client().chat.completions.create(
         model=LLM_MODEL,
         messages=_build_messages(history or [], question),
         temperature=0.7,
@@ -87,7 +98,7 @@ def chat_general(question: str, history: list[dict] | None = None) -> str:
 
 def stream_general(question: str, history: list[dict] | None = None):
     """通用对话（流式版）—— 生成器逐段产出，SSE 接口用"""
-    response = client.chat.completions.create(
+    response = get_client().chat.completions.create(
         model=LLM_MODEL,
         messages=_build_messages(history or [], question),
         temperature=0.7,

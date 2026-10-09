@@ -9,9 +9,8 @@
 #   2. 按协议写一个 ask_xxx / stream_xxx（转 HTTP + 透传）
 #   3. llm_service.AGENTS 里加意图识别的描述
 
-import httpx
-
 from core.config import KB_AGENT_URL
+from core.http_client import client as http_client
 
 AGENTS = {
     "knowledge": {
@@ -27,7 +26,7 @@ def is_available(agent: str) -> bool:
     if not entry:
         return False
     try:
-        r = httpx.get(f"{entry['base_url']}/", timeout=1.0)
+        r = http_client.get(f"{entry['base_url']}/", timeout=1.0)
         return r.status_code == 200
     except Exception:
         return False
@@ -40,7 +39,7 @@ def ask_knowledge(question: str, session_id: str | None, selected_ids: list[int]
     失败（没启动/超时/报错）返回 None，由调用方降级兜底
     """
     try:
-        r = httpx.post(
+        r = http_client.post(
             f"{KB_AGENT_URL}/api/v1/agent/chat",
             json={"question": question, "session_id": session_id, "selected_ids": selected_ids},
             timeout=60.0,
@@ -54,7 +53,7 @@ def ask_knowledge(question: str, session_id: str | None, selected_ids: list[int]
 def get_catalog() -> dict | None:
     """取 kb-agent 的知识目录（聊天端「指定文档」面板用）；失败返回 None"""
     try:
-        r = httpx.get(f"{KB_AGENT_URL}/api/v1/agent/catalog", timeout=10.0)
+        r = http_client.get(f"{KB_AGENT_URL}/api/v1/agent/catalog", timeout=10.0)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -64,7 +63,7 @@ def get_catalog() -> dict | None:
 def preselect_documents(question: str) -> dict | None:
     """让 kb-agent 的 AI 预选文档（面板打开时给默认勾选）；失败返回 None"""
     try:
-        r = httpx.post(
+        r = http_client.post(
             f"{KB_AGENT_URL}/api/v1/agent/preselect",
             json={"question": question},
             timeout=60.0,
@@ -75,12 +74,24 @@ def preselect_documents(question: str) -> dict | None:
         return None
 
 
+def delete_kb_messages(session_id: str) -> bool:
+    """
+    清掉 kb-agent 里某个会话的多轮上下文（删除对话记录时调用）
+    best-effort：失败返回 False，不影响本地删除
+    """
+    try:
+        r = http_client.delete(f"{KB_AGENT_URL}/api/v1/messages/{session_id}", timeout=5.0)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
 def stream_knowledge(question: str, session_id: str | None, selected_ids: list[int] | None = None):
     """
     调用 kb-agent 流式问答，逐行透传 SSE（原样转发，不解析不改写）
     生成器产出的是 SSE 原始行（event:/data:/空行），调用方直接 yield 给前端
     """
-    with httpx.stream(
+    with http_client.stream(
             "POST",
             f"{KB_AGENT_URL}/api/v1/agent/chat/stream",
             json={"question": question, "session_id": session_id, "selected_ids": selected_ids},

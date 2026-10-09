@@ -2,9 +2,11 @@ from fastapi import FastAPI
 
 from api.chat import router as chat_router
 from api.admin import router as admin_router
+from api.conversations import router as conversations_router
 from core.config import KB_AGENT_URL
 from core.database import Base, engine
 from models.call import Call  # noqa: F401  导入模型才会注册到 Base.metadata（create_all 建表依据）
+from models.conversation import ChatMessage, Conversation  # noqa: F401
 
 app = FastAPI(title="企业AI助手", version="0.2.0")
 
@@ -13,6 +15,7 @@ Base.metadata.create_all(bind=engine)
 
 app.include_router(chat_router)
 app.include_router(admin_router)
+app.include_router(conversations_router)
 
 
 @app.get("/")

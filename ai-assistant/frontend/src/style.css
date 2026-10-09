@@ -9,31 +9,156 @@ body {
   background: #f5f6f8;
 }
 
-/* 外壳始终紧贴内容：收起 = 900（只有聊天列），展开 = 900 + 面板 288
-   卡片长出来的宽度正好被面板占满，不会出现两侧留白；
-   两个过渡同长同缓动，一起播 = 面板向左展开、聊天列被向右推开 */
+/* 全宽铺满：三栏 = 对话记录（260px 固定）+ 指定文档面板（展开时挤窄聊天列）+ 聊天区铺满剩余 */
 .chat-page {
   display: flex;
   height: 100vh;
-  max-width: 900px;
-  margin: 0 auto;
   background: #fff;
-  box-shadow: 0 0 20px rgba(0, 0, 0, 0.05);
-  transition: max-width 0.22s ease;
 }
 
-.chat-page.panel-open {
-  max-width: 1188px;
-}
-
-/* 聊天列固定不超过 900px：宽屏下动画期间文字不重排，只是整体被推开 */
 .chat-main {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
-  max-width: 900px;
-  margin: 0 auto;
+}
+
+/* ---- 对话记录列表（左栏） ---- */
+.session-list {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #eee;
+  background: #fafbfc;
+}
+
+.session-list-head {
+  padding: 14px 14px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+/* 新建入口：标题下方全宽（列表长了也第一眼可见）；提问进行中禁用 */
+.btn-new-session {
+  margin: 0 14px 10px;
+  padding: 7px 0;
+  border: 1px solid #dbe8f6;
+  border-radius: 8px;
+  background: #f0f7ff;
+  color: #2b6ca3;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.btn-new-session:hover {
+  background: #e1efff;
+  border-color: #4a90d9;
+}
+
+.btn-new-session:disabled {
+  color: #b9c9da;
+  background: #f7fafd;
+  border-color: #e8eef5;
+  cursor: not-allowed;
+}
+
+.session-list .hint {
+  padding: 0 14px;
+  font-size: 12px;
+  color: #999;
+}
+
+.session-list .err {
+  padding: 0 14px;
+  font-size: 12px;
+  color: #d9534f;
+}
+
+.session-items {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px 14px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.session-item:hover {
+  background: #eef2f6;
+}
+
+.session-item.active {
+  background: #e8f3ff;
+}
+
+.session-list.busy .session-item {
+  cursor: default;
+}
+
+.s-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.s-title {
+  font-size: 13px;
+  color: #444;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item.active .s-title {
+  color: #2b6ca3;
+  font-weight: 600;
+}
+
+.s-time {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #aaa;
+}
+
+/* 行内删除：平时隐身，悬停出现；点一下变红「确认删」，再点才真删 */
+.s-del {
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: #bbb;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.session-item:hover .s-del {
+  opacity: 1;
+}
+
+.s-del:hover {
+  color: #d9534f;
+}
+
+.s-del.confirming {
+  opacity: 1;
+  background: #d9534f;
+  color: #fff;
+  font-size: 11px;
+}
+
+.s-del:disabled {
+  cursor: not-allowed;
 }
 
 /* ---- 指定文档面板 ---- */
@@ -269,11 +394,17 @@ body {
 }
 
 .bubble {
-  max-width: 80%;
+  max-width: 92%;
   padding: 10px 14px;
   border-radius: 10px;
   font-size: 14px;
   line-height: 1.6;
+}
+
+/* 回答气泡：宽度 = 输入框宽再收 64px（输入框 = 100% - 发送按钮 88px - 间距 10px），
+   右缘与输入框保持一段距离，不齐平；固定宽度保证短段落回答也用满整栏 */
+.msg-row.assistant .bubble {
+  width: calc(100% - 162px);
 }
 
 .msg-row.user .bubble {
@@ -338,64 +469,101 @@ body {
   border-top: 1px solid #eee;
 }
 
-/* 输入框上方的作用域条：指定文档开关 + 当前范围提示 */
-.scope-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-bottom: 8px;
-}
-
-.scope-btn {
-  padding: 4px 10px;
-  border: 1px solid #ddd;
-  border-radius: 999px;
-  background: #fff;
-  color: #666;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.scope-btn.active {
-  border-color: #4a90d9;
-  background: #e8f3ff;
-  color: #2b6ca3;
-}
-
-.scope-clear {
-  border: none;
-  background: none;
-  padding: 0;
-  color: #999;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.scope-clear:hover {
-  color: #4a90d9;
-}
-
 .input-row {
   display: flex;
   gap: 10px;
+  align-items: stretch;
 }
 
-.chat-input textarea {
+/* 输入框容器：textarea 无边框，边框与聚焦态由容器承担；
+   底部一行放小胶囊类控件（以后新增的输入相关开关都排在这里，不另占行高） */
+.input-box {
   flex: 1;
-  resize: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px 7px;
   border: 1px solid #ddd;
   border-radius: 8px;
-  padding: 10px;
+  background: #fff;
+}
+
+.input-box:focus-within {
+  border-color: #4a90d9;
+}
+
+.input-box textarea {
+  flex: 1;
+  resize: none;
+  border: none;
+  padding: 0;
   font-size: 14px;
   font-family: inherit;
   outline: none;
 }
 
-.chat-input textarea:focus {
-  border-color: #4a90d9;
+.scope-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
 }
 
-.input-row button {
+/* 未勾选：灰色小胶囊（点开「指定文档」面板） */
+.scope-chip {
+  padding: 2px 10px;
+  border: 1px solid #e2e6ea;
+  border-radius: 999px;
+  background: #f7f8fa;
+  color: #8a94a0;
+  font-size: 12px;
+  line-height: 16px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.scope-chip:hover {
+  color: #4a90d9;
+  border-color: #dbe8f6;
+}
+
+/* 已勾选：整颗高亮胶囊，内部两个按钮（文字开合面板 / ✕ 清除恢复全库） */
+.scope-chip.active {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border-color: #dbe8f6;
+  background: #e8f3ff;
+  color: #2b6ca3;
+  cursor: default;
+}
+
+.scope-chip.active .chip-toggle {
+  padding: 2px 4px 2px 10px;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.scope-chip.active .chip-clear {
+  padding: 2px 8px 2px 4px;
+  border: none;
+  background: none;
+  color: #7aa7cc;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+
+.scope-chip.active .chip-clear:hover {
+  color: #d9534f;
+}
+
+.input-row .send-btn {
   width: 88px;
   border: none;
   border-radius: 8px;
@@ -405,7 +573,7 @@ body {
   cursor: pointer;
 }
 
-.input-row button:disabled {
+.input-row .send-btn:disabled {
   background: #bcd4ec;
   cursor: not-allowed;
 }
@@ -569,27 +737,4 @@ body {
 
 .msg-actions button:hover {
   color: #4a90d9;
-}
-
-/* ---- 页头「新对话」 ---- */
-.chat-header .btn-new {
-  margin-left: auto;
-  align-self: center;
-  padding: 5px 14px;
-  border: 1px solid #ddd;
-  border-radius: 999px;
-  background: #fff;
-  color: #666;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.chat-header .btn-new:hover {
-  border-color: #4a90d9;
-  color: #4a90d9;
-}
-
-.chat-header .btn-new:disabled {
-  color: #ccc;
-  cursor: not-allowed;
 }

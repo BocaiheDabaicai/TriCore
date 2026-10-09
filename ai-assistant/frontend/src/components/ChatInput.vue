@@ -20,20 +20,30 @@ function onKeydown(e) {
 
 <template>
   <footer class="chat-input">
-    <div class="scope-bar">
-      <button class="scope-btn" :class="{ active: chat.selectedIds.length }" @click="chat.togglePanel()">
-        指定文档{{ chat.selectedIds.length ? ` · ${chat.selectedIds.length} 篇` : '' }}
-      </button>
-      <button v-if="chat.selectedIds.length" class="scope-clear" @click="chat.clearSelection()">清除，恢复全库问答</button>
-    </div>
     <div class="input-row">
-      <textarea
-        v-model="chat.draft"
-        rows="2"
-        placeholder="提问…（Enter 发送，Shift+Enter 换行）"
-        @keydown="onKeydown"
-      ></textarea>
-      <button :disabled="chat.loading" @click="send">{{ chat.loading ? '回答中…' : '发送' }}</button>
+      <!-- 输入框容器：textarea + 底部一行小胶囊（作用域类控件都放这里，不另占行高） -->
+      <div class="input-box">
+        <textarea
+          v-model="chat.draft"
+          rows="2"
+          placeholder="提问…（Enter 发送，Shift+Enter 换行）"
+          @keydown="onKeydown"
+        ></textarea>
+
+        <div class="scope-chips">
+          <!-- 已勾选：整颗高亮胶囊（点文字开合面板，点 ✕ 清除恢复全库） -->
+          <div v-if="chat.selectedIds.length" class="scope-chip active">
+            <button class="chip-toggle" @click="chat.togglePanel()">
+              指定文档 · {{ chat.selectedIds.length }} 篇
+            </button>
+            <button class="chip-clear" title="清除，恢复全库问答" @click="chat.clearSelection()">✕</button>
+          </div>
+          <!-- 未勾选：灰色小胶囊，点开面板 -->
+          <button v-else class="scope-chip" @click="chat.togglePanel()">指定文档</button>
+        </div>
+      </div>
+
+      <button class="send-btn" :disabled="chat.loading" @click="send">{{ chat.loading ? '回答中…' : '发送' }}</button>
     </div>
   </footer>
 </template>

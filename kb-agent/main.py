@@ -5,6 +5,7 @@ from api.knowledge import router as knowledge_router
 from api.myapi import router as myapi_router
 from api.agent import router as agent_router
 from api.missed import router as missed_router
+from api.messages import router as messages_router
 
 # 数据库相关
 from core.database import engine, Base
@@ -43,6 +44,7 @@ app.include_router(knowledge_router)
 app.include_router(myapi_router)
 app.include_router(agent_router)
 app.include_router(missed_router)
+app.include_router(messages_router)
 
 
 @app.get("/")

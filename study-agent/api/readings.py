@@ -4,13 +4,14 @@ import re
 import shutil
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from core.database import get_db
 from models.reading import Reading
+from services import file_parser, llm_service
 
 router = APIRouter(prefix="/api/readings", tags=["研读记录"])
 
@@ -27,6 +28,7 @@ def _row_dict(r: Reading) -> dict:
         "id": r.id,
         "title": r.title,
         "mode": r.mode,
+        "lang": r.lang or "zh",
         "tag": r.tag,
         "rating": r.rating or 0,
         "domains": r.domains or [],
@@ -45,6 +47,11 @@ def _clean_rating(value) -> int:
     return max(0, min(10, int(value or 0)))
 
 
+def _clean_lang(value) -> str:
+    # 语言只认 zh / en，其它一律按中文（前端只发这两个值）
+    return value if value in ("zh", "en") else "zh"
+
+
 def _clean_domains(domains) -> list[str]:
     # 去空白、去重、最多 3 个
     out: list[str] = []
@@ -58,6 +65,7 @@ def _clean_domains(domains) -> list[str]:
 class ReadingCreate(BaseModel):
     title: str = ""
     mode: str = "close"
+    lang: str = "zh"
     tag: str = ""
     rating: int = 0
     domains: list[str] = []
@@ -70,6 +78,7 @@ class ReadingCreate(BaseModel):
 class ReadingUpdate(BaseModel):
     title: str | None = None
     mode: str | None = None
+    lang: str | None = None
     tag: str | None = None
     rating: int | None = None
     domains: list[str] | None = None
@@ -86,6 +95,49 @@ def list_readings(db: Session = Depends(get_db)):
     return {"message": "ok", "total": len(data), "data": data}
 
 
+@router.post("/extract")
+def extract_fields(
+    file: UploadFile | None = File(None),
+    reading_id: int | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """AI 识别文献信息（语言/标题/作者/出版时间/期刊/标签）——传新文件或已有记录的附件都行。
+    同步 def：解析与模型调用都是阻塞操作，交给 FastAPI 线程池，避免冻住事件循环（kb-agent 踩过的坑）。
+    任何失败都返回 200 + data:null（附一句 message），不阻断手动填写流程。"""
+    if not llm_service.is_configured():
+        return {"message": "未配置 LLM（study-agent/.env），跳过自动识别", "data": None}
+
+    if file is not None:
+        filename = file.filename or "file"
+        content = file.file.read()
+    elif reading_id is not None:
+        row = db.get(Reading, reading_id)
+        if not row or not row.attachment:
+            return {"message": "该记录没有附件", "data": None}
+        path = UPLOAD_DIR / f"{reading_id}_{row.attachment}"
+        if not path.exists():
+            return {"message": "附件文件不存在", "data": None}
+        filename, content = row.attachment, path.read_bytes()
+    else:
+        raise HTTPException(400, "需要上传文件或指定 reading_id")
+
+    try:
+        text, image = file_parser.front_matter(filename, content)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception:
+        return {"message": "文件解析失败，跳过自动识别", "data": None}
+
+    # 标签候选：已有记录用过的标签（模型优先从这里挑，保持标签体系不膨胀）
+    tag_candidates = [t for (t,) in db.query(Reading.tag).distinct() if t]
+    result = llm_service.extract_fields(
+        text=text, image=image, filename=filename, tag_candidates=tag_candidates
+    )
+    if not result:
+        return {"message": "AI 识别失败，可手动填写", "data": None}
+    return {"message": "ok", "data": result}
+
+
 @router.get("/{reading_id}")
 def get_reading(reading_id: int, db: Session = Depends(get_db)):
     row = db.get(Reading, reading_id)
@@ -100,6 +152,7 @@ def create_reading(payload: ReadingCreate, db: Session = Depends(get_db)):
     row = Reading(
         title=payload.title.strip() or "未命名文献",
         mode=payload.mode,
+        lang=_clean_lang(payload.lang),
         tag=payload.tag.strip(),
         rating=_clean_rating(payload.rating),
         domains=_clean_domains(payload.domains),
@@ -122,6 +175,8 @@ def update_reading(reading_id: int, payload: ReadingUpdate, db: Session = Depend
     data = payload.model_dump(exclude_unset=True)
     if data.get("rating") is not None:
         data["rating"] = _clean_rating(data["rating"])
+    if data.get("lang") is not None:
+        data["lang"] = _clean_lang(data["lang"])
     if data.get("domains") is not None:
         data["domains"] = _clean_domains(data["domains"])
     for field, value in data.items():

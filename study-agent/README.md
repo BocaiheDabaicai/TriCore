@@ -16,8 +16,9 @@
 - **修改流程**：详情页「修改」→ `/edit/:id` 研读页编辑模式（带入全部内容），按钮变「更新」（PUT）
 - **附件与删除**：`POST /api/readings/{id}/attachment`（multipart 存 `uploads/{id}_{文件名}`，换新附件先删旧文件）；`GET .../attachment` 浏览器内直接打开（PDF/图片内联）；`DELETE /api/readings/{id}` 连带删除附件文件
 - **全局轻提示**（pinia store + ToastHost）：创建/更新/上传/删除成功与各类失败都有顶部提示，2.6 秒自动消失
+- **AI 识别文献信息**（2026-10-09）：选完文件自动调大模型抽取 语言/标题/作者/出版时间/期刊/分类标签 并回填——只补空字段，语言没手动改过才覆盖；「AI 识别」按钮 = 覆盖式重识别（编辑旧记录时读已存附件，不用重传）。PDF 首页文字层直取（免费零误差）、扫描件与图片首页走视觉；识别中在文件区右上角有轻提示，失败不阻断手动填写。配置在 `study-agent/.env`（LLM 三项，照 kb-agent 模式，复用 kb-agent/services 的解析思路精简而来）
 - **已接入 manager**：`manager/services.json` 增加 study-agent（8003）/ study-frontend（5175）两条
-- **下一步**：精读模板字段与领域泛读追问集、LLM 辅助；uploads/ 目录进 .gitignore（数据策略落实时）
+- **下一步**：精读模板字段与领域泛读追问集；uploads/ 目录进 .gitignore（数据策略落实时）
 
 ## 启动
 
@@ -26,6 +27,7 @@
 cd study-agent
 python -m venv .venv                                          # 首次
 .venv\Scripts\python.exe -m pip install -r requirements.txt  # 首次
+copy .env.example .env                                        # 首次：填 LLM 三项（不填则跳过 AI 识别）
 .venv\Scripts\python.exe -m uvicorn main:app --port 8003
 
 # 前端（5175）
@@ -42,6 +44,8 @@ npm run dev        # http://localhost:5175
 study-agent/
 ├── main.py                  # 后端入口（8003）
 ├── core/database.py         # SQLite 配置 + get_db
+├── core/config.py           # .env 配置（LLM 三项）
+├── services/                # file_parser.py（首页取文：文字层直取 / 渲染成图）/ llm_service.py（文献信息抽取）
 ├── models/                  # reading.py（研读记录）/ source.py（寻文站点）
 ├── api/                     # readings.py / sources.py（接口 + 种子）
 ├── frontend/                # 前端（Vite 8 + Vue3 + daisyUI + pinia + vue-router）
@@ -59,6 +63,7 @@ study-agent/
 |---|---|
 | title | 文献标题 |
 | mode | 精读 `close` / 泛读 `skim` |
+| lang | 文献语言 `zh` / `en`（研读页方形小标切换；AI 识别自动判断；存量按期刊粗分回填） |
 | tag | 分类标签（选填，可自创或复用已有） |
 | rating | 评分 0-10（详情页点星设置，0 = 未打分；半星 = 1 分） |
 | domains | 小领域列表（0-3 个，如 数字化 / 智能体；JSON 存字符串数组） |

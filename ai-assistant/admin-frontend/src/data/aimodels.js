@@ -52,13 +52,13 @@ export const AI_USAGES = [
   },
   {
     ownerKey: 'study-agent',
-    planned: true,
-    config: '将来同样放 study-agent/.env（照 kb-agent 的模式读取）',
+    config: '配置位置：study-agent/.env —— LLM 三项（LLM_API_KEY / LLM_BASE_URL / LLM_MODEL）',
     items: [
       {
-        task: '暂无 AI',
-        model: '—',
-        detail: '下一步规划：LLM 辅助整理笔记 / 生成摘要——接入方式照 kb-agent/services/llm_service.py 的模式',
+        task: '文献信息识别',
+        model: 'DeepSeek（V4 Flash）',
+        detail: '选完文件自动抽取 语言 / 标题（英文给中文译名）/ 作者 / 出版时间 / 期刊 / 分类标签 并回填表单（只补空字段）；'
+          + 'PDF 首页文字层直取，扫描件与图片走首页视觉理解；标签优先从已有候选里挑，保持体系不膨胀',
       },
     ],
   },

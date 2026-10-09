@@ -6,6 +6,7 @@ import { marked } from 'marked'
 import { deleteReading, getReading, listReadings, updateReading } from '../api/readings'
 import { useToastStore } from '../stores/toast'
 import { MODE_META } from '../utils/reading'
+import LangToggle from '../components/LangToggle.vue'
 import StarRating from '../components/StarRating.vue'
 
 // 笔记详情：从回顾页点进来查看；「修改」把内容带入研读界面继续写；「删除」带确认弹窗
@@ -55,6 +56,11 @@ onMounted(async () => {
 // ---- 评分：星级交互在 StarRating 组件里（含"再点同一颗 = 取消"），这里只管保存 ----
 async function setRating(value) {
   await savePartial({ rating: value })
+}
+
+// ---- 语言：中英切换点了即存（与评分同款静默保存） ----
+async function setLang(v) {
+  if ((item.value.lang || 'zh') !== v) await savePartial({ lang: v })
 }
 
 // ---- 小领域：最多 3 个，可输入自创或选已有 ----
@@ -145,6 +151,11 @@ const metaText = computed(() =>
           <div class="flex items-center gap-2">
             <span class="text-xs text-base-content/40 shrink-0">评分</span>
             <StarRating :value="item.rating" interactive @change="setRating" />
+          </div>
+
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-base-content/40 shrink-0">语言</span>
+            <LangToggle :value="item.lang || 'zh'" @change="setLang" />
           </div>
 
           <div class="flex items-center gap-1.5 flex-wrap">

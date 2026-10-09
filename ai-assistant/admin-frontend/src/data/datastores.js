@@ -38,6 +38,14 @@ export const DATASTORES = [
         desc: '每次问答调用记一笔：问题 / 意图 / 实际回答来源 / 是否降级 / 耗时——全链路视角只有调度器有',
         live: 'calls',
       },
+      {
+        name: 'conversations',
+        desc: '对话记录·会话表：session_id 唯一（前端首轮发问时懒生成）、标题 = 首问截断 50 字、创建与最近更新时间',
+      },
+      {
+        name: 'chat_messages',
+        desc: '对话记录·消息：按 session_id 索引存 user / assistant 两行；assistant 行的 meta 存实际回答来源、来源列表、检索方式与是否降级',
+      },
     ],
   },
   {

@@ -26,6 +26,21 @@ export const INTERFACE_GROUPS = [
         desc: 'AI 预选文档（代理转发）',
         detail: '把目录整体交给 LLM，按当前问题挑出最相关的 ≤5 篇作为默认勾选；目录超过 60 条时先向量粗排取 20 条候选再挑。用户可增删，预选失败就返回空、由用户自己勾。',
       },
+      {
+        method: 'GET', path: '/api/v1/conversations',
+        desc: '对话记录列表（左侧栏）',
+        detail: '本机全部会话按最近更新倒序，含标题（首问截断 50 字）与消息数。对话记录存在调度器：全链路视角只有它有。空会话不落库，发过问、答成功才出现在列表里。',
+      },
+      {
+        method: 'GET', path: '/api/v1/conversations/{session_id}',
+        desc: '单个会话 + 全部消息（点开回放）',
+        detail: '切换会话时拉全量消息回放，assistant 行带 meta（实际回答来源 / 来源列表 / 检索方式）——降级轮存的也是实际来源而不是意图名。不存在返回 data:null，前端当"已在别处被删"处理。',
+      },
+      {
+        method: 'DELETE', path: '/api/v1/conversations/{session_id}',
+        desc: '删除会话（行内二次确认）',
+        detail: '删本地两表 + best-effort 通知知识库清掉它那份多轮上下文（失败不影响本地删除）；幂等，重复删也返回成功。',
+      },
     ],
   },
   {
@@ -121,6 +136,11 @@ export const INTERFACE_GROUPS = [
         desc: '知识管理接口（承接管理端代理流量）',
         detail: '上面"管理端 → 调度器"那组 kb 接口的下一跳——调度器只转发不处理，知识数据的一切增删查都落在这里。',
       },
+      {
+        method: 'DELETE', path: '/api/v1/messages/{session_id}',
+        desc: '清某个会话的多轮上下文',
+        detail: '聊天端删除对话记录时由调度器 best-effort 调用：知识库的 messages 表按 session_id 存着它自己那份多轮上下文，一并清掉。幂等，失败不影响调度器侧删除。',
+      },
     ],
   },
   {
@@ -145,6 +165,12 @@ export const INTERFACE_GROUPS = [
         method: 'PUT', path: '/api/readings/{id}',
         desc: '更新记录（自动保存走它）',
         detail: '停笔 1.2 秒自动保存一次；内容无变化时前端不发请求（版本号比对），避免无谓写入。',
+      },
+      {
+        method: 'POST', path: '/api/readings/extract',
+        desc: 'AI 识别文献信息（自动回填表单）',
+        detail: '选完文件自动调用（或传 reading_id 读已存附件）：PDF 首页文字层直取、扫描件与图片走视觉；'
+          + '返回 语言/标题/作者/出版时间/期刊/标签，前端只补空字段；失败返回 data=null，不阻断手动填写。',
       },
       {
         method: 'POST', path: '/api/readings/{id}/attachment',

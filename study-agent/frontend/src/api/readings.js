@@ -30,3 +30,12 @@ export async function uploadReadingAttachment(id, file) {
   form.append('file', file)
   return request.post(`/readings/${id}/attachment`, form)
 }
+
+// AI 识别文献信息：传新选的文件，或指定已有记录的附件（后端解析 + 大模型抽取，可能要几十秒）
+// 返回 { message, data: {lang,title,author,published,journal,tag} | null }
+export async function extractReadingFields({ file, readingId } = {}) {
+  const form = new FormData()
+  if (file) form.append('file', file)
+  if (readingId) form.append('reading_id', readingId)
+  return request.post('/readings/extract', form, { timeout: 180000 })
+}

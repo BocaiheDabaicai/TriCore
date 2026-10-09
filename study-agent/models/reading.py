@@ -18,6 +18,9 @@ class Reading(Base):
     # 阅读模式：close 精读 / skim 泛读
     mode: Mapped[str] = mapped_column(String(20), default="close")
 
+    # 文献语言：zh 中文 / en 英文（研读页手动选；存量按期刊粗分回填）
+    lang: Mapped[str] = mapped_column(String(10), default="zh")
+
     # 分类标签（选填，自创或复用已有）
     tag: Mapped[str] = mapped_column(String(50), default="")
 

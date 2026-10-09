@@ -30,7 +30,7 @@ ai-assistant（统一AI助手服务：意图识别 + 路由 + 汇总）
 |---|---|
 | 后端 | Python + FastAPI（与 kb-agent 一致） |
 | 前端 | 聊天端：Vite + Vue3 + pinia；管理端：Vite + Vue3 + pinia + vue-router + Tailwind CSS 4 + daisyUI 5 |
-| 服务间调用 | httpx（支持 SSE 流式透传） |
+| 服务间调用 | httpx（支持 SSE 流式透传）；全服务共享一个 Client（`core/http_client.py`）——module-level 的 `httpx.get/post` 每次新建客户端，Windows 上实测每次多花 ~1.3 秒 |
 | 大模型 | DeepSeek（OpenAI 兼容接口） |
 
 ## 后续规划
@@ -49,9 +49,11 @@ ai-assistant（统一AI助手服务：意图识别 + 路由 + 汇总）
 
 - 需求：用户在某 session 内要求「总结一下刚才的对话」
 - 方案（无需落库）：前端 `messages` 数组已持有本次会话全量消息 → 调度器意图识别加 `summarize` → `llm_service.summarize_history`（总结专用 prompt）→ 前端 history 从「最近 10 条」改为「全量发送」
-- 待办：session_id 存 localStorage（刷新不丢会话）、长会话分段总结（map-reduce）、token 优化（仅总结类请求带全量历史）
+- 待办：session_id 存 localStorage（刷新不丢会话——2026-10-09 起对话记录已落库、刷新可从列表点回，**自动恢复当前会话**仍待做）、长会话分段总结（map-reduce）、token 优化（仅总结类请求带全量历史）
 
 ## 更新日志
+
+- 2026-10-09 对话记录 + 聊天端全宽布局 + 两个修复（明细见根 README 当天更新日志）：① assistant.db 新增 `conversations` / `chat_messages` 两表 + `/api/v1/conversations` 三个接口（列表 / 详情 / 删除）；session_id 改为**前端首轮懒生成** `session-{12hex}`；落库闸门（来源 none / 空答案不落）；删除时 best-effort 清 kb-agent 那份会话上下文（`delete_kb_messages`）；流式端点在 kb 透传循环旁路 `consume` 累积答案与来源（自吞异常）。② 聊天端三栏全宽（对话记录 260px + 指定文档面板 + 聊天区铺满），「新对话」移至左栏、输入框内小胶囊版「指定文档」；回答气泡固定宽度（输入框宽 − 64px）。③ `core/http_client.py`：共享 httpx.Client，registry 与 admin 代理共 14 处调用从 module-level 写法换过来（每次调用省 ~1.3 秒，删除接口 1470ms→15ms）。④ `llm_service` OpenAI 客户端改**延迟创建**（`get_client()`）——无 .env 也能启动并走「未配置大模型」降级分支
 
 - 2026-09-14 管理端代码整理（零行为变化，CDP 逐页验证通过）：建 `utils/`（meta 状态与类型映射 / format / error 错误提取 / architecture 画图纯函数）+ `composables/usePolling`（三处轮询共用）+ `api/client.js`（createClient 工厂，/api、/ops、/study 三个 axios 实例合一）+ `components/PageHeader`；架构图页 509 行单文件拆为 `views/architecture/` 八文件——父组件只留视图切换（VIEWS 配置数组）、实时状态与抽屉外壳，四个视图面板与节点/接口两种抽屉内容各自独立，数据面板自带轮询；六个视图全部接入公共模块
 - 2026-09-01 管理界面 v1：前端拆分为聊天端（frontend）+ 管理端（admin-frontend，5174，Vite 8 + vue-router 5 + Tailwind 4 + daisyUI 5）；本服务建库（SQLite assistant.db + calls 表，每次问答记一笔）；新增 `/api/v1/admin`（overview 统计 / calls 记录 / kb 代理转发：知识列表、删除、上传、未命中清单），kb-agent 不可用统一 502

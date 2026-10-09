@@ -2,11 +2,12 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { BookOpen, Calendar, Clock, Paperclip, Tag, Upload, User } from 'lucide-vue-next'
-import { createReading, getReading, listReadings, updateReading, uploadReadingAttachment } from '../api/readings'
+import { createReading, extractReadingFields, getReading, listReadings, updateReading, uploadReadingAttachment } from '../api/readings'
 import { useToastStore } from '../stores/toast'
 import { isAllowedAttachment, isImageFile } from '../utils/file'
 import { formatClock } from '../utils/format'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
+import LangToggle from '../components/LangToggle.vue'
 
 const toast = useToastStore()
 
@@ -18,6 +19,7 @@ const router = useRouter()
 const recordId = ref(null)  // 有值 = 编辑已有记录
 const title = ref('')
 const mode = ref('close')   // close 精读 / skim 泛读
+const lang = ref('zh')      // zh 中文 / en 英文
 const tag = ref('')         // 分类标签（选填，可自创或选已有）
 const author = ref('')      // 文献信息（选填）
 const published = ref('')
@@ -68,6 +70,57 @@ function acceptFile(file) {
   }
   pickedFile.value = file
   markDirty()
+  runExtract(false)   // 选完文件自动 AI 识别一次（只补空字段）
+}
+
+// ---- AI 识别文献信息：选完文件自动跑；「AI 识别」按钮 = 覆盖式重跑 ----
+const extracting = ref(false)
+let langTouched = false   // 用户手动点过语言切换后，识别不再覆盖语言
+
+function onLangChange(v) {
+  langTouched = true
+  lang.value = v
+}
+
+async function runExtract(overwrite) {
+  if (extracting.value) return
+  const file = pickedFile.value
+  const id = recordId.value
+  if (!file && !(id && attachment.value)) return   // 没有文件可识别
+  extracting.value = true
+  try {
+    // 新选的还没上传 → 传文件本体；否则让后端读已存的附件
+    const res = await extractReadingFields(file ? { file } : { readingId: id })
+    if (!res.data) {
+      toast.error(res.message || 'AI 识别失败，可手动填写')
+      return
+    }
+    const filled = applyExtracted(res.data, overwrite)
+    toast.success(filled ? 'AI 已填写识别到的文献信息' : 'AI 识别完成，无需填写新内容')
+  } catch {
+    toast.error('AI 识别失败，可手动填写')
+  } finally {
+    extracting.value = false
+  }
+}
+
+// 回填规则：普通模式只填空着的字段；覆盖模式（点「AI 识别」）全部更新
+function applyExtracted(d, overwrite) {
+  let filled = 0
+  const fields = [['title', title], ['author', author], ['published', published], ['journal', journal], ['tag', tag]]
+  for (const [key, ref] of fields) {
+    const v = (d[key] || '').trim()
+    if (!v || ref.value.trim() === v) continue
+    if (overwrite || !ref.value.trim()) {
+      ref.value = v
+      filled++
+    }
+  }
+  if ((overwrite || !langTouched) && (d.lang === 'zh' || d.lang === 'en') && lang.value !== d.lang) {
+    lang.value = d.lang
+    filled++
+  }
+  return filled
 }
 
 function onPick(e) {
@@ -113,7 +166,7 @@ function markDirty() {
 
 // 只盯"手输字段"；选文件不走这里（acceptFile 里主动标），
 // 避免保存成功后程序化清空 pickedFile 又触发一轮多余保存
-watch([title, mode, tag, author, published, journal, note], () => {
+watch([title, mode, lang, tag, author, published, journal, note], () => {
   if (hydrating) return
   markDirty()
 })
@@ -131,6 +184,7 @@ function collectPayload() {
   return {
     title: title.value.trim(),
     mode: mode.value,
+    lang: lang.value,
     tag: tag.value.trim(),
     author: author.value.trim(),
     published: published.value.trim(),
@@ -143,7 +197,11 @@ function collectPayload() {
 async function flushSave() {
   if (savingPromise) { await savingPromise; return true }   // 等上一轮，避免并发打架
   clearTimeout(saveTimer)
-  if (!canSave.value) return false
+  if (!canSave.value) {
+    // 新建页还没内容可存（如只点了一下语言切换）：不显示"未保存"
+    if (!recordId.value) saveState.value = 'idle'
+    return false
+  }
   // 没有新改动、也没有待传附件 → 不用保存
   if (recordId.value && version === savedVersion && !pickedFile.value) return true
 
@@ -228,6 +286,7 @@ onMounted(async () => {
       recordId.value = r.id
       title.value = r.title
       mode.value = r.mode
+      lang.value = r.lang || 'zh'
       tag.value = r.tag || ''
       author.value = r.author || ''
       published.value = r.published || ''
@@ -303,8 +362,12 @@ const clockText = computed(() => formatClock(now.value))
             class="max-w-full max-h-full object-contain p-3 drop-shadow"
           />
 
-          <!-- 悬浮：上传状态 + 替换 -->
+          <!-- 悬浮：AI 识别（轻提示运行状态）+ 上传状态 + 替换 -->
           <div class="absolute top-3 right-3 flex items-center gap-2">
+            <span v-if="extracting" class="badge badge-sm badge-ghost bg-base-100/90 shadow-sm gap-1.5">
+              <span class="loading loading-spinner loading-xs"></span>AI 识别中
+            </span>
+            <button v-else class="btn btn-xs bg-base-100/90 shadow-sm" @click.stop="runExtract(true)">AI 识别</button>
             <span v-if="pickedFile" class="badge badge-sm badge-ghost bg-base-100/90 shadow-sm">保存后上传</span>
             <button class="btn btn-xs bg-base-100/90 shadow-sm" @click.stop="fileInput?.click()">替换</button>
           </div>
@@ -325,6 +388,8 @@ const clockText = computed(() => formatClock(now.value))
       :class="mode === 'close' ? 'max-w-7xl' : 'max-w-3xl'"
     >
       <div class="flex items-center gap-2">
+        <!-- 语言：方形小标，尺寸与标题输入框一致；点击切换，不抢精读/泛读的视觉权重 -->
+        <LangToggle size="lg" :value="lang" @change="onLangChange" />
         <input v-model="title" class="input flex-1" placeholder="文献标题" />
         <div class="join">
           <button class="btn join-item" :class="mode === 'close' ? 'btn-primary' : 'btn-ghost'" @click="mode = 'close'">

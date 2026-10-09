@@ -1,2 +1,5 @@
+# 密钥配置 —— 绝对不能提交到 git
+.env
+
 .venv/
 __pycache__/

@@ -18,6 +18,23 @@ export function preselectDocs(question) {
   return request.post('/v1/preselect', { question }, { timeout: 60000 })
 }
 
+// ---- 对话记录（左侧列表）----
+
+// 全部会话（按最近更新倒序）
+export function fetchConversations() {
+  return request.get('/v1/conversations')
+}
+
+// 单个会话 + 全部消息（点开旧会话回放）；已删返回 data:null
+export function fetchConversation(sessionId) {
+  return request.get(`/v1/conversations/${sessionId}`)
+}
+
+// 删除会话（幂等）
+export function deleteConversation(sessionId) {
+  return request.delete(`/v1/conversations/${sessionId}`)
+}
+
 // 流式问答（SSE → fetch）—— axios 在浏览器读不了流式响应体，
 // 只能 fetch + ReadableStream 逐块读；封装成 async 生成器，
 // 调用方用 for await...of 逐个拿事件，屏蔽底层差异
