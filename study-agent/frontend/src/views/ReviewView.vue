@@ -1,13 +1,15 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { AlignLeft, BookOpen, Calendar, Clock, FileText, Languages, PieChart, Search, SlidersHorizontal, Star } from 'lucide-vue-next'
-import { listReadings } from '../api/readings'
+import { AlignLeft, BookOpen, Calendar, Clock, Download, FileText, Languages, PieChart, Search, SlidersHorizontal, Star } from 'lucide-vue-next'
+import { exportReadings, listReadings } from '../api/readings'
 import { LANG_META, MODE_META } from '../utils/reading'
 import StarRating from '../components/StarRating.vue'
+import { useToastStore } from '../stores/toast'
 
 // 回顾页：检索行（搜索 + 高级筛选开关） + 主体列表；右下角悬浮统计
 const router = useRouter()
+const toast = useToastStore()
 
 const items = ref([])
 const loading = ref(true)
@@ -19,6 +21,92 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+// ---- 导出模式：默认收起，打开后才显示勾选框与工具条 ----
+// 全选 = 全部记录（items），不是 filtered/paged——用户明确要求不受筛选影响
+const exportMode = ref(false)
+const selectedIds = ref(new Set())
+const exporting = ref(false)
+
+const selectedCount = computed(() => selectedIds.value.size)
+const allSelected = computed(
+  () => items.value.length > 0 && items.value.every((r) => selectedIds.value.has(r.id)),
+)
+
+function toggleOne(id) {
+  // 替换 Set 而不是原地改，保证依赖它的 computed 稳定刷新
+  const next = new Set(selectedIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedIds.value = next
+}
+
+// 导出模式下点整张卡片 = 勾选/取消；普通模式下才是进详情
+function onCardClick(r) {
+  if (exportMode.value) {
+    toggleOne(r.id)
+  } else {
+    router.push(`/review/${r.id}`)
+  }
+}
+
+// 退出导出模式时清空选择，避免藏着看不见的已选项
+watch(exportMode, (on) => {
+  if (!on) selectedIds.value = new Set()
+})
+
+function toggleSelectAll() {
+  selectedIds.value = allSelected.value
+    ? new Set()
+    : new Set(items.value.map((r) => r.id))
+}
+
+function clearSelection() {
+  selectedIds.value = new Set()
+}
+
+function todayStamp() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+async function exportErrorMessage(err) {
+  // responseType=blob 时后端的 {detail} 也是 Blob，读出来再解析
+  const data = err?.response?.data
+  if (data instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await data.text())
+      if (parsed?.detail) return parsed.detail
+    } catch {}
+  }
+  return '导出失败，请重试'
+}
+
+async function exportSelected() {
+  if (!selectedCount.value || exporting.value) return
+  exporting.value = true
+  try {
+    // items 是更新时间倒序；按它的顺序发送，ZIP 里的 01/02 才与页面一致
+    const ids = items.value.filter((r) => selectedIds.value.has(r.id)).map((r) => r.id)
+    if (!ids.length) return
+    const blob = await exportReadings(ids)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `研读回顾-${todayStamp()}.zip`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    // 延迟释放，避免部分浏览器取消下载
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+    toast.success(`已导出 ${ids.length} 条记录`)
+  } catch (err) {
+    toast.error(await exportErrorMessage(err))
+  } finally {
+    exporting.value = false
+  }
+}
 
 // 筛选组：类型 / 语言 / 评分（将来再加筛选组时，在此追加一组配置）
 const MODE_OPTIONS = [
@@ -295,10 +383,59 @@ const stats = computed(() => {
               <span class="text-sm text-base-content/70">高级筛选</span>
               <input v-model="filterOpen" type="checkbox" class="toggle toggle-sm" />
             </label>
+
+            <!-- 导出模式开关：默认收起，打开后才显示勾选框与导出工具条 -->
+            <label
+              v-if="!loading && items.length"
+              class="flex items-center gap-2 shrink-0 cursor-pointer select-none"
+            >
+              <Download class="w-4 h-4 text-base-content/40" />
+              <span class="text-sm text-base-content/70">导出</span>
+              <input
+                v-model="exportMode"
+                type="checkbox"
+                class="toggle toggle-sm"
+                :disabled="exporting"
+                aria-label="开启导出模式"
+              />
+            </label>
           </div>
 
           <div v-if="filtering" class="mt-2 text-xs text-base-content/40 tabular-nums">
             筛出 {{ filtered.length }}/{{ items.length }} 条
+          </div>
+
+          <!-- 导出工具条：全选按全部记录（不受筛选影响），已选跨分页保留 -->
+          <div
+            v-if="exportMode && !loading && items.length"
+            class="mt-3 flex items-center gap-2 flex-wrap rounded-xl border border-base-300 bg-base-200/40 px-3 py-2"
+          >
+            <label class="flex items-center gap-1.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                class="checkbox checkbox-sm"
+                :checked="allSelected"
+                :indeterminate="selectedCount > 0 && !allSelected"
+                :aria-label="`全选全部 ${items.length} 条记录`"
+                @change="toggleSelectAll"
+              />
+              <span class="text-sm">全选</span>
+            </label>
+            <span class="text-xs text-base-content/50 tabular-nums">
+              已选 {{ selectedCount }} / {{ items.length }} 条
+            </span>
+            <span v-if="filtering" class="text-xs text-base-content/40">全选不受筛选影响</span>
+            <div class="flex-1"></div>
+            <button v-if="selectedCount" class="btn btn-ghost btn-xs" @click="clearSelection">清空</button>
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="!selectedCount || exporting"
+              @click="exportSelected"
+            >
+              <span v-if="exporting" class="loading loading-spinner loading-xs"></span>
+              <Download v-else class="w-4 h-4" />
+              {{ exporting ? '导出中…' : '导出 ZIP' }}
+            </button>
           </div>
 
           <div class="mt-4">
@@ -322,11 +459,26 @@ const stats = computed(() => {
                 v-for="r in paged"
                 :key="r.id"
                 class="card bg-base-100 shadow hover:shadow-md transition-shadow cursor-pointer"
-                @click="router.push(`/review/${r.id}`)"
+                @click="onCardClick(r)"
               >
                 <div class="card-body py-4">
                   <div class="flex items-center justify-between gap-3">
                     <div class="flex items-center gap-2 min-w-0">
+                      <!-- 勾选导出：@click.stop 防止触发卡片的详情跳转；只绑 @change 避免切换两次 -->
+                      <label
+                        v-if="exportMode"
+                        class="shrink-0 flex items-center justify-center cursor-pointer"
+                        :title="selectedIds.has(r.id) ? '取消选择' : '选择导出'"
+                        @click.stop
+                      >
+                        <input
+                          type="checkbox"
+                          class="checkbox checkbox-sm"
+                          :checked="selectedIds.has(r.id)"
+                          :aria-label="`选择「${r.title}」`"
+                          @change="toggleOne(r.id)"
+                        />
+                      </label>
                       <!-- 圆形语言标识：Cn / En，放在标题前面 -->
                       <span
                         v-if="LANG_META[r.lang]"

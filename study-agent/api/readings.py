@@ -2,10 +2,14 @@
 
 import re
 import shutil
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
+from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -20,6 +24,10 @@ UPLOAD_DIR = Path("uploads")
 
 # 允许的附件类型：论文 PDF + 截图图片
 ALLOWED_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"}
+
+# 导出时用的中文显示名（未知值原样输出）
+MODE_TEXT = {"close": "精读", "skim": "泛读"}
+LANG_TEXT = {"zh": "中文", "en": "英文"}
 
 
 def _row_dict(r: Reading) -> dict:
@@ -60,6 +68,92 @@ def _clean_domains(domains) -> list[str]:
         if d and d not in out:
             out.append(d)
     return out[:3]
+
+
+def _parse_export_ids(raw: str | None) -> list[int] | None:
+    """解析逗号分隔的记录 id；None = 没传 ids（导出全部）。
+    显式传了 ids 却解析不出有效值（如 ?ids=）要报错，不能悄悄导出全部。"""
+    if raw is None:
+        return None
+    ids: list[int] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = int(part)
+        except ValueError:
+            raise HTTPException(400, "ids 参数格式不正确")
+        if value <= 0:
+            raise HTTPException(400, "ids 参数格式不正确")
+        if value not in ids:
+            ids.append(value)
+    if not ids:
+        raise HTTPException(400, "请选择要导出的记录")
+    return ids
+
+
+def _md_meta(value) -> str:
+    """Markdown 元数据值：压成单行、空值用 —（笔记正文不要走这里）"""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text or "—"
+
+
+def _safe_md_filename(title: str, fallback: str) -> str:
+    """清洗 Windows 非法字符；数字前缀由调用方加，重名与保留设备名都不怕"""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", (title or "").strip())
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    if not name:
+        name = fallback
+    return name[:80].strip(" .") or fallback
+
+
+def _reading_markdown(data: dict) -> str:
+    """一条记录的完整 Markdown：全部元数据 + 原始笔记（不截断、不改标题层级）"""
+    title = _md_meta(data.get("title"))
+    if title == "—":
+        title = "未命名文献"
+    mode = MODE_TEXT.get(data.get("mode"), data.get("mode") or "—")
+    lang = LANG_TEXT.get(data.get("lang"), data.get("lang") or "—")
+    rating = f"{data['rating']}/10" if data.get("rating") else "未评分"
+    domains = "、".join(data.get("domains") or []) or "—"
+    note = data.get("note") or ""
+
+    lines = [
+        f"# {title}",
+        "",
+        f"- 阅读模式：{mode}",
+        f"- 语言：{lang}",
+        f"- 标签：{_md_meta(data.get('tag'))}",
+        f"- 评分：{rating}",
+        f"- 领域：{domains}",
+        f"- 作者：{_md_meta(data.get('author'))}",
+        f"- 出版时间：{_md_meta(data.get('published'))}",
+        f"- 期刊：{_md_meta(data.get('journal'))}",
+        f"- 附件：{_md_meta(data.get('attachment'))}",
+        f"- 创建时间：{_md_meta(data.get('created_at'))}",
+        f"- 更新时间：{_md_meta(data.get('updated_at'))}",
+        "",
+        "---",
+        "",
+        "## 笔记",
+        "",
+        note if note.strip() else "—",
+    ]
+    text = "\n".join(lines)
+    return text if text.endswith("\n") else text + "\n"
+
+
+def _build_export_zip(rows: list[Reading]) -> bytes:
+    """每条记录一个 .md，内存打包（35 条笔记很小，不需要临时文件）"""
+    width = max(2, len(str(len(rows))))
+    buf = BytesIO()
+    with ZipFile(buf, "w", ZIP_DEFLATED) as zf:
+        for i, row in enumerate(rows, start=1):
+            data = _row_dict(row)
+            name = f"{i:0{width}d}-{_safe_md_filename(data['title'], f'记录-{row.id}')}.md"
+            zf.writestr(name, _reading_markdown(data).encode("utf-8"))
+    return buf.getvalue()
 
 
 class ReadingCreate(BaseModel):
@@ -136,6 +230,39 @@ def extract_fields(
     if not result:
         return {"message": "AI 识别失败，可手动填写", "data": None}
     return {"message": "ok", "data": result}
+
+
+@router.get("/export")
+def export_readings(
+    ids: str | None = Query(None, description="逗号分隔的记录 ID；不传导出全部"),
+    db: Session = Depends(get_db),
+):
+    """批量导出：每条记录一个 Markdown，打包成 ZIP（完整元数据 + 原始笔记；附件原文件不打包）。
+    同步 def：SQLite 查询与内存打包都是阻塞操作，交给 FastAPI 线程池。"""
+    id_list = _parse_export_ids(ids)
+    if id_list is None:
+        # 与列表一致：最近更新的在前
+        rows = db.query(Reading).order_by(Reading.updated_at.desc(), Reading.id.desc()).all()
+    else:
+        found = db.query(Reading).filter(Reading.id.in_(id_list)).all()
+        by_id = {r.id: r for r in found}
+        # 按请求顺序输出，ZIP 里的 01、02 与页面上的选择顺序一致；缺失的 id 跳过
+        rows = [by_id[i] for i in id_list if i in by_id]
+    if not rows:
+        raise HTTPException(404, "没有可导出的记录")
+
+    content = _build_export_zip(rows)
+    day = datetime.now().strftime("%Y-%m-%d")
+    ascii_name = f"readings-{day}.zip"
+    cn_name = f"研读回顾-{day}.zip"
+    # 响应头只能是 latin-1：中文名放 RFC 5987 的 filename*，filename= 留 ASCII 兜底
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{quote(cn_name, safe='')}"
+        )
+    }
+    return Response(content=content, media_type="application/zip", headers=headers)
 
 
 @router.get("/{reading_id}")
