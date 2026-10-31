@@ -173,6 +173,12 @@ export const INTERFACE_GROUPS = [
           + '返回 语言/标题/作者/出版时间/期刊/标签，前端只补空字段；失败返回 data=null，不阻断手动填写。',
       },
       {
+        method: 'POST', path: '/api/readings/summarize',
+        desc: 'AI 全文速读总结（写入笔记区）',
+        detail: '拖入/选择文件且勾选「AI 自动总结」时与字段识别并行调用：有文字层的 PDF 抽全文，按用户固定的 7 段阅读框架输出 Markdown；'
+          + '内容严格取自原文（可翻译），缺失标题留空；只写空笔记，已有内容直接跳过；扫描件与图片跳过总结（字段识别不受影响）；失败返回 data=null。',
+      },
+      {
         method: 'POST', path: '/api/readings/{id}/attachment',
         desc: '上传论文附件（PDF / 图片）',
         detail: '存为 uploads/{id}_{文件名}；替换附件时先删旧文件。选文件不立即上传，保存时搭车传，失败保留自动重试。',

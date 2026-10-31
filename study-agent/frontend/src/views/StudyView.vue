@@ -2,10 +2,10 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { BookOpen, Calendar, Clock, Paperclip, Tag, Upload, User } from 'lucide-vue-next'
-import { createReading, extractReadingFields, getReading, listReadings, updateReading, uploadReadingAttachment } from '../api/readings'
+import { createReading, extractReadingFields, getReading, listReadings, summarizeReading, updateReading, uploadReadingAttachment } from '../api/readings'
 import { useToastStore } from '../stores/toast'
 import { isAllowedAttachment, isImageFile } from '../utils/file'
-import { formatClock } from '../utils/format'
+import { formatClock, formatDate } from '../utils/format'
 import MarkdownEditor from '../components/MarkdownEditor.vue'
 import LangToggle from '../components/LangToggle.vue'
 
@@ -33,6 +33,12 @@ const tagOpen = ref(false)      // 标签候选面板显隐
 const pickedFile = ref(null)    // 新选择的文件（保存后自动上传）
 const fileInput = ref(null)     // 隐藏的文件选择框
 const dragOver = ref(false)     // 拖拽悬停高亮
+
+// AI 全文速读：勾选框记忆在 localStorage（默认开启）；拖入/选文件后与「AI 识别」并行跑
+const autoSummary = ref(localStorage.getItem('study.autoSummary') !== '0')
+watch(autoSummary, (v) => localStorage.setItem('study.autoSummary', v ? '1' : '0'))
+const summarizing = ref(false)
+let summarySeq = 0              // 连续换文件时，只认最后一次请求的结果
 
 // 左区显示的文件名：优先显示新选的文件，否则显示已有附件
 const displayFileName = computed(() => pickedFile.value?.name || attachment.value)
@@ -71,6 +77,7 @@ function acceptFile(file) {
   pickedFile.value = file
   markDirty()
   runExtract(false)   // 选完文件自动 AI 识别一次（只补空字段）
+  runSummary()        // 勾选了「拖入后 AI 自动总结」时，并行生成全文速读
 }
 
 // ---- AI 识别文献信息：选完文件自动跑；「AI 识别」按钮 = 覆盖式重跑 ----
@@ -121,6 +128,44 @@ function applyExtracted(d, overwrite) {
     filled++
   }
   return filled
+}
+
+// ---- AI 全文速读：结果只写进空笔记，绝不覆盖已有内容 ----
+async function runSummary() {
+  if (!autoSummary.value) return
+  const file = pickedFile.value
+  const id = recordId.value
+  if (!file && !(id && attachment.value)) return
+  if (file && isImageFile(file.name)) {
+    toast.error('图片不支持全文总结，已跳过（文献信息识别不受影响）')
+    return
+  }
+  if (note.value.trim()) {
+    toast.error('笔记已有内容，跳过 AI 总结')
+    return
+  }
+  const seq = ++summarySeq
+  summarizing.value = true
+  try {
+    const res = await summarizeReading(file ? { file } : { readingId: id })
+    if (seq !== summarySeq) return   // 期间换了文件 / 离开页面，丢弃旧结果
+    if (!res.data?.summary) {
+      toast.error(res.message || 'AI 总结失败，可稍后重试')
+      return
+    }
+    if (note.value.trim()) {
+      toast.error('笔记已有内容，AI 总结未写入')
+      return
+    }
+    const summary = res.data.summary.trim()
+    note.value = `> AI 速读 · ${formatDate(new Date())} · 从原文提取，数字与判断请对照原文\n\n${summary}\n\n---\n\n## 我的笔记\n`
+    markDirty()
+    toast.success('AI 已生成全文速读')
+  } catch {
+    if (seq === summarySeq) toast.error('AI 总结失败，可稍后重试')
+  } finally {
+    if (seq === summarySeq) summarizing.value = false
+  }
 }
 
 function onPick(e) {
@@ -308,6 +353,7 @@ onUnmounted(() => {
   clearInterval(timer)
   clearTimeout(saveTimer)
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+  summarySeq++   // 页面已离开，丢弃还在路上的总结结果
 })
 
 const clockText = computed(() => formatClock(now.value))
@@ -362,8 +408,11 @@ const clockText = computed(() => formatClock(now.value))
             class="max-w-full max-h-full object-contain p-3 drop-shadow"
           />
 
-          <!-- 悬浮：AI 识别（轻提示运行状态）+ 上传状态 + 替换 -->
+          <!-- 悬浮：AI 识别 / AI 总结状态 + 上传状态 + 替换 -->
           <div class="absolute top-3 right-3 flex items-center gap-2">
+            <span v-if="summarizing" class="badge badge-sm badge-ghost bg-base-100/90 shadow-sm gap-1.5">
+              <span class="loading loading-spinner loading-xs"></span>AI 总结中
+            </span>
             <span v-if="extracting" class="badge badge-sm badge-ghost bg-base-100/90 shadow-sm gap-1.5">
               <span class="loading loading-spinner loading-xs"></span>AI 识别中
             </span>
@@ -373,10 +422,14 @@ const clockText = computed(() => formatClock(now.value))
           </div>
         </template>
 
-        <!-- 没文件：引导选择 -->
+        <!-- 没文件：引导选择 + AI 自动总结开关（勾选状态记在本机） -->
         <template v-else>
           <Upload class="w-10 h-10 text-base-content/30" />
           <div class="text-sm text-base-content/60">点击选择，或拖拽 PDF / 图片到这里</div>
+          <label class="flex items-center gap-1.5 text-xs text-base-content/50 mt-3" @click.stop>
+            <input v-model="autoSummary" type="checkbox" class="checkbox checkbox-xs" />
+            拖入后 AI 自动总结
+          </label>
         </template>
       </div>
     </div>

@@ -4,7 +4,7 @@
 >
 > 与 kb-agent 的区别：kb-agent 是"文档 → 分块 → 问答"的企业知识库；研读库是"结构化阅读管理"（精读模板、分类标签、统计），数据模型本质不同，因此独立成项目。**保持独立：不接入调度器、不作为集群问答 Agent**——仅由 manager 守护（统一起停/探活/日志）、在管理端统一查看。
 
-## 现状（2026-09-14）
+## 现状（2026-10-31）
 
 - **后端已建成**（8003）：readings（研读记录 增/改/查 + 附件下载端点）+ sources（寻文站点）两组接口；SQLite 启动自动建表；寻文站点首次启动（表为空）自动灌入种子（paper.md 记录 0003 的清单）
 - **前端已接真实接口**（5175）：请求层 `src/api/request.js`（axios 实例，走 Vite 代理 `/api` → 8003）；`readings.js` / `sources.js` 由静态数据切为 HTTP 调用（返回结构不变，页面零改动）
@@ -17,8 +17,9 @@
 - **附件与删除**：`POST /api/readings/{id}/attachment`（multipart 存 `uploads/{id}_{文件名}`，换新附件先删旧文件）；`GET .../attachment` 浏览器内直接打开（PDF/图片内联）；`DELETE /api/readings/{id}` 连带删除附件文件
 - **全局轻提示**（pinia store + ToastHost）：创建/更新/上传/删除成功与各类失败都有顶部提示，2.6 秒自动消失
 - **AI 识别文献信息**（2026-10-09）：选完文件自动调大模型抽取 语言/标题/作者/出版时间/期刊/分类标签 并回填——只补空字段，语言没手动改过才覆盖；「AI 识别」按钮 = 覆盖式重识别（编辑旧记录时读已存附件，不用重传）。PDF 首页文字层直取（免费零误差）、扫描件与图片首页走视觉；识别中在文件区右上角有轻提示，失败不阻断手动填写。配置在 `study-agent/.env`（LLM 三项，照 kb-agent 模式，复用 kb-agent/services 的解析思路精简而来）
+- **AI 全文速读总结**（2026-10-31）：研读页上传区有「拖入后 AI 自动总结」勾选框（记忆在本机，默认开启）。勾选时选/拖入文件会与「AI 识别」**并行**调用 `POST /api/readings/summarize`，按用户自己的阅读框架（`structrue.md`：前言 / 研究准备 / 研究过程 / 研究结果和检验 / 研究再检验 / 研究结论 / 指导论文）输出 Markdown 并写入笔记区。**内容严格取自原文**——英文翻译、中文可摘录，不推断、不改写；原文没有直接写出的数字/参数不写（不得由公式反推）；某标题下无对应内容就留空，不写占位；不使用 LaTeX/公式，公式与推导用文字说明；「表达想法」只写作者明确观点；「指导论文」照旧（约 N 篇 + 领域粗分）。篇幅随原文内容，可能比旧版长。文末自动留 `---` + `## 我的笔记`。**只写空笔记**——已有内容直接跳过、不发模型请求；图片直接跳过；扫描件（无文字层 PDF）跳过全文总结，字段识别不受影响。全文抽取用 PyMuPDF，超长文档保留头部 60% + 尾部 40%；按 `%PDF-` 文件头兜底判型（文件名编码丢后缀时仍可识别）
 - **已接入 manager**：`manager/services.json` 增加 study-agent（8003）/ study-frontend（5175）两条
-- **下一步**：精读模板字段与领域泛读追问集；uploads/ 目录进 .gitignore（数据策略落实时）
+- **下一步**：全文总结的重新生成 / 覆盖策略（第一版不做）；精读模板字段与领域泛读追问集；uploads/ 目录进 .gitignore（数据策略落实时）
 
 ## 启动
 
@@ -27,7 +28,7 @@
 cd study-agent
 python -m venv .venv                                          # 首次
 .venv\Scripts\python.exe -m pip install -r requirements.txt  # 首次
-copy .env.example .env                                        # 首次：填 LLM 三项（不填则跳过 AI 识别）
+copy .env.example .env                                        # 首次：填 LLM 三项（不填则跳过 AI 识别与总结）
 .venv\Scripts\python.exe -m uvicorn main:app --port 8003
 
 # 前端（5175）
@@ -45,7 +46,7 @@ study-agent/
 ├── main.py                  # 后端入口（8003）
 ├── core/database.py         # SQLite 配置 + get_db
 ├── core/config.py           # .env 配置（LLM 三项）
-├── services/                # file_parser.py（首页取文：文字层直取 / 渲染成图）/ llm_service.py（文献信息抽取）
+├── services/                # file_parser.py（首页取文 + 全文抽取 / 扫描件判断）/ llm_service.py（文献信息抽取 + 全文速读总结）
 ├── models/                  # reading.py（研读记录）/ source.py（寻文站点）
 ├── api/                     # readings.py / sources.py（接口 + 种子）
 ├── frontend/                # 前端（Vite 8 + Vue3 + daisyUI + pinia + vue-router）

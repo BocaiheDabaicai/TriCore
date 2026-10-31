@@ -5,3 +5,9 @@ export function formatClock(d) {
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 星期${WEEKDAYS[d.getDay()]} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
 }
+
+// 日期文案：2026-10-31（AI 速读标记用）
+export function formatDate(d) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}

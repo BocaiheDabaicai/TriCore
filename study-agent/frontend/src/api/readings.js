@@ -39,3 +39,12 @@ export async function extractReadingFields({ file, readingId } = {}) {
   if (readingId) form.append('reading_id', readingId)
   return request.post('/readings/extract', form, { timeout: 180000 })
 }
+
+// AI 全文速读总结：传新选的文件，或指定已有记录的附件（全文调用通常 20~60 秒）
+// 返回 { message, data: {summary, chars} | null }——扫描件 / 图片 / 失败时 data 为 null
+export async function summarizeReading({ file, readingId } = {}) {
+  const form = new FormData()
+  if (file) form.append('file', file)
+  if (readingId) form.append('reading_id', readingId)
+  return request.post('/readings/summarize', form, { timeout: 300000 })
+}

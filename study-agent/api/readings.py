@@ -138,6 +138,44 @@ def extract_fields(
     return {"message": "ok", "data": result}
 
 
+@router.post("/summarize")
+def summarize_reading(
+    file: UploadFile | None = File(None),
+    reading_id: int | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """AI 全文速读总结——只处理有文字层的 PDF；扫描件 / 图片直接跳过（200 + data:null）。
+    同步 def：全文解析与模型调用都是阻塞操作，交给 FastAPI 线程池。"""
+    if not llm_service.is_configured():
+        return {"message": "未配置 LLM（study-agent/.env），跳过自动总结", "data": None}
+
+    if file is not None:
+        filename = file.filename or "file"
+        content = file.file.read()
+    elif reading_id is not None:
+        row = db.get(Reading, reading_id)
+        if not row or not row.attachment:
+            return {"message": "该记录没有附件", "data": None}
+        path = UPLOAD_DIR / f"{reading_id}_{row.attachment}"
+        if not path.exists():
+            return {"message": "附件文件不存在", "data": None}
+        filename, content = row.attachment, path.read_bytes()
+    else:
+        raise HTTPException(400, "需要上传文件或指定 reading_id")
+
+    try:
+        text = file_parser.full_text(filename, content)
+    except Exception:
+        return {"message": "文件解析失败，跳过自动总结", "data": None}
+    if not text:
+        return {"message": "扫描件 / 图片暂不支持全文总结，已跳过（文献信息识别不受影响）", "data": None}
+
+    summary = llm_service.summarize_paper(text, filename)
+    if not summary:
+        return {"message": "AI 总结失败，可重新拖入文件重试", "data": None}
+    return {"message": "ok", "data": {"summary": summary, "chars": len(summary)}}
+
+
 @router.get("/{reading_id}")
 def get_reading(reading_id: int, db: Session = Depends(get_db)):
     row = db.get(Reading, reading_id)
