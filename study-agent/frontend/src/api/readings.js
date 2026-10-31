@@ -24,6 +24,15 @@ export async function deleteReading(id) {
   return request.delete(`/readings/${id}`)
 }
 
+// 批量导出：每条记录一个 Markdown，后端打包成 ZIP
+// responseType=blob → 请求层拦截器返回的 resp.data 就是 Blob（不是 JSON）
+export async function exportReadings(ids) {
+  return request.get('/readings/export', {
+    params: { ids: ids.join(',') },
+    responseType: 'blob',
+  })
+}
+
 // 上传论文附件（FormData 走 multipart，axios 会自动带对 Content-Type）
 export async function uploadReadingAttachment(id, file) {
   const form = new FormData()
